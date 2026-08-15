@@ -25,6 +25,7 @@ spec:
           helm:
             valueFiles:
               - $values/control-planes/values/default.yaml
+              - $values/control-planes/values/{{name}}/default.yaml
 
         - repoURL: https://github.com/hemant0308/argocd-platform.git
           targetRevision: main
