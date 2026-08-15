@@ -1,0 +1,7 @@
+# Cluster-specific ArgoCD values for cp-1.
+#
+# Common configuration is maintained in:
+# control-planes/values/default.yaml
+#
+# Values in this file override the common configuration.
+
