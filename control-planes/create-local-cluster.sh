@@ -150,13 +150,14 @@ TOKEN=""
 
 for i in {1..30}; do
 
-    TOKEN="$(
-        kubectl --context "${CONTROL_PLANE_CONTEXT}" \
-            get secret "${TOKEN_SECRET}" \
-            -n "${SERVICE_ACCOUNT_NAMESPACE}" \
-            -o jsonpath='{.data.token}' \
-            2>/dev/null || true
-    )"
+  TOKEN="$(
+      kubectl \
+          --context "${CONTROL_PLANE_CONTEXT}" \
+          get secret "${TOKEN_SECRET}" \
+          -n "${SERVICE_ACCOUNT_NAMESPACE}" \
+          -o jsonpath='{.data.token}' \
+          | base64 --decode
+  )"
 
     if [[ -n "${TOKEN}" ]]; then
         break
