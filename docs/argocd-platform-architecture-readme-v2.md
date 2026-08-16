@@ -245,9 +245,9 @@ An application's partition does not change when its cluster is reassigned to a d
 |---|---|
 | `id` | Control-plane ID |
 | `name` | Control-plane name |
-| `server` | ArgoCD/Kubernetes endpoint/reference |
+| `server` | ArgoCD server / Kubernetes API endpoint (used for ArgoCD API calls and cluster registration) |
 | `status` | Healthy/unhealthy/draining/etc. |
-| `capacity` | Optional scheduling capacity |
+| `endpoint` | ArgoCD web UI base URL (e.g. `https://argocd.example.com`). Used to construct navigation links to ArgoCD resources (applications, cluster settings, etc.). Nullable — omit for control planes where the web UI URL is not yet known. |
 | `created_at` | Creation timestamp |
 | `updated_at` | Last update |
 
@@ -1001,10 +1001,10 @@ spec:
     namespace: argocd
 ```
 
-This Application manages:
+This Application manages the child ApplicationSet:
 
 ```text
-project-partition-01-appset
+project-partition-01  (ApplicationSet)
 ```
 
 ---
@@ -1086,10 +1086,10 @@ Example:
 cluster-partition-01
 ```
 
-manages:
+manages the child ApplicationSet:
 
 ```text
-cluster-partition-01-appset
+cluster-partition-01  (ApplicationSet)
 ```
 
 and passes:
@@ -1116,10 +1116,10 @@ Conceptually:
 Managed ArgoCD
       │
       ▼
-cluster-partition-01
+cluster-partition-01  (Application)
       │
       ▼
-cluster-partition-01-appset
+cluster-partition-01  (ApplicationSet)
       │
       ▼
 Cluster registration resources
@@ -1195,10 +1195,10 @@ spec:
     namespace: argocd
 ```
 
-This Application manages:
+This Application manages the child ApplicationSet:
 
 ```text
-application-partition-0001-appset
+application-partition-0001  (ApplicationSet)
 ```
 
 ---
@@ -1218,7 +1218,7 @@ It creates one actual Application for each item.
 Example:
 
 ```text
-application-partition-0001-appset
+application-partition-0001  (ApplicationSet)
         │
         ├── app-001
         ├── app-002
@@ -1255,10 +1255,10 @@ The flow is:
 Managed ArgoCD
       │
       ▼
-application-partition-0001
+application-partition-0001  (Application)
       │
       ▼
-application-partition-0001-appset
+application-partition-0001  (ApplicationSet)
       │
       ▼
 app-001
@@ -1295,9 +1295,9 @@ generators:
 It creates:
 
 ```text
-argocd-cp-1
-argocd-cp-2
-argocd-cp-3
+control-plane-cp-1
+control-plane-cp-2
+control-plane-cp-3
 ```
 
 Each Application installs the public `argo-cd` Helm chart.

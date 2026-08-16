@@ -13,7 +13,7 @@ spec:
 
   template:
     metadata:
-      name: 'argocd-{{nameNormalized}}'
+      name: 'control-plane-{{nameNormalized}}'
 
     spec:
       project: default

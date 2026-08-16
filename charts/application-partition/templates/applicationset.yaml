@@ -22,7 +22,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: application-partition-{{ .Values.partitionNumber }}-groups-appset
+  name: application-partition-{{ .Values.partitionNumber }}
   namespace: argocd
   annotations:
     argocd-platform/partition-number: "{{ .Values.partitionNumber }}"
