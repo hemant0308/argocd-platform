@@ -2,9 +2,11 @@ package com.argocd.platform.api.service.argocd;
 
 import com.argocd.platform.api.exception.InvalidRequestException;
 import com.argocd.platform.api.model.request.argocd.PluginGeneratorRequest;
+import com.argocd.platform.api.model.response.argocd.ApplicationItem;
 import com.argocd.platform.api.model.response.argocd.ClusterItem;
 import com.argocd.platform.api.model.response.argocd.PluginGeneratorResponse;
 import com.argocd.platform.api.model.response.argocd.ProjectItem;
+import com.argocd.platform.api.repository.ArgoCDApplicationRepository;
 import com.argocd.platform.api.repository.ClusterRepository;
 import com.argocd.platform.api.repository.ControlPlaneRepository;
 import com.argocd.platform.api.repository.PartitionRepository;
@@ -27,11 +29,14 @@ import java.util.stream.Collectors;
  *   <li>{@code cluster-partitions} — all cluster partitions (no extra params)</li>
  *   <li>{@code cluster-groups} — clusters in a partition grouped by control plane;
  *       requires {@code partitionNumber}</li>
- *   <li>{@code project-partitions} — all project partitions with control planes list
- *       (no extra params)</li>
+ *   <li>{@code project-partitions} — all project partitions (no extra params)</li>
  *   <li>{@code project-groups} — projects in a partition fanned out per control plane;
  *       requires {@code partitionNumber}. Every CP receives the full project list
  *       because AppProjects must exist on all control planes.</li>
+ *   <li>{@code application-partitions} — all application partitions (no extra params)</li>
+ *   <li>{@code application-groups} — applications in a partition grouped by control plane;
+ *       requires {@code partitionNumber}. Each entry carries the full application list
+ *       (with sources) for that CP. Apps without a CP assignment are excluded.</li>
  * </ul>
  *
  * <p>Parameter map values are native JSON types (string, integer, array, object) —
@@ -46,6 +51,7 @@ public class ArgoCDPluginService {
     private final ClusterRepository clusterRepository;
     private final ProjectRepository projectRepository;
     private final ControlPlaneRepository controlPlaneRepository;
+    private final ArgoCDApplicationRepository argoCDApplicationRepository;
 
     @Transactional(readOnly = true)
     public PluginGeneratorResponse execute(PluginGeneratorRequest request) {
@@ -56,13 +62,16 @@ public class ArgoCDPluginService {
         String resource = params.getOrDefault("resource", "");
 
         List<Map<String, Object>> parameters = switch (resource) {
-            case "cluster-partitions" -> clusterPartitions();
-            case "cluster-groups"     -> clusterGroups(params);
-            case "project-partitions" -> projectPartitions();
-            case "project-groups"     -> projectGroups(params);
+            case "cluster-partitions"     -> clusterPartitions();
+            case "cluster-groups"         -> clusterGroups(params);
+            case "project-partitions"     -> projectPartitions();
+            case "project-groups"         -> projectGroups(params);
+            case "application-partitions" -> applicationPartitions();
+            case "application-groups"     -> applicationGroups(params);
             default -> throw new InvalidRequestException(
                     "Unknown resource: '" + resource + "'. Supported values: " +
-                    "cluster-partitions, cluster-groups, project-partitions, project-groups");
+                    "cluster-partitions, cluster-groups, project-partitions, project-groups, " +
+                    "application-partitions, application-groups");
         };
 
         return PluginGeneratorResponse.builder()
@@ -184,6 +193,84 @@ public class ArgoCDPluginService {
                     m.put("partitionNumber", partitionNumber);
                     m.put("controlPlane", cpName);
                     m.put("projects", minimalProjects);
+                    return m;
+                })
+                .collect(Collectors.toList());
+    }
+
+    // -------------------------------------------------------------------------
+    // resource: application-partitions
+    // Returns one entry per application partition. Each entry generates one
+    // application-partition-NNN Application in the top-level ApplicationSet.
+    // -------------------------------------------------------------------------
+
+    private List<Map<String, Object>> applicationPartitions() {
+        return partitionRepository.findAllApplicationPartitions().stream()
+                .map(p -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("partitionNumber", p.getPartitionNumber());
+                    m.put("generation", p.getGeneration());
+                    m.put("applicationCount", p.getApplicationCount());
+                    return m;
+                })
+                .collect(Collectors.toList());
+    }
+
+    // -------------------------------------------------------------------------
+    // resource: application-groups
+    // Returns one entry per control plane that has applications in the partition.
+    // Like cluster-groups, applications are assigned to a specific cluster which
+    // has a control plane — so we group by CP. Apps without a CP are excluded.
+    // Each entry carries the full application list (with sources) for that CP.
+    // One entry per CP generates one application-partition-NNN-CP Application
+    // that deploys ArgoCD Application resources to the target control plane.
+    // -------------------------------------------------------------------------
+
+    private List<Map<String, Object>> applicationGroups(Map<String, String> params) {
+        int partitionNumber = getRequiredInt(params, "partitionNumber");
+        UUID partitionId = partitionRepository.findApplicationPartitionIdByNumber(partitionNumber)
+                .orElseThrow(() -> new InvalidRequestException(
+                        "No application partition found with partitionNumber: " + partitionNumber));
+
+        List<ApplicationItem> applications = argoCDApplicationRepository.findByPartitionId(partitionId);
+
+        // Group by controlPlane (preserve insertion order); skip apps without a CP.
+        // One entry per CP — the Helm chart uses fromJsonArray to range over applications.
+        Map<String, List<ApplicationItem>> byCp = applications.stream()
+                .filter(a -> a.getControlPlane() != null)
+                .collect(Collectors.groupingBy(
+                        ApplicationItem::getControlPlane,
+                        LinkedHashMap::new,
+                        Collectors.toList()));
+
+        return byCp.entrySet().stream()
+                .map(entry -> {
+                    List<Map<String, Object>> minimalApps = entry.getValue().stream()
+                            .map(a -> {
+                                List<Map<String, String>> sources = a.getSources().stream()
+                                        .map(s -> {
+                                            Map<String, String> sm = new LinkedHashMap<>();
+                                            sm.put("repoUrl", s.getRepoUrl());
+                                            sm.put("revision", s.getRevision());
+                                            if (s.getPath() != null)  sm.put("path", s.getPath());
+                                            if (s.getChart() != null) sm.put("chart", s.getChart());
+                                            return sm;
+                                        })
+                                        .collect(Collectors.toList());
+
+                                Map<String, Object> am = new LinkedHashMap<>();
+                                am.put("name", a.getName());
+                                am.put("project", a.getProject());
+                                am.put("cluster", a.getCluster());
+                                am.put("sources", sources);
+                                return am;
+                            })
+                            .collect(Collectors.toList());
+
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("partitionNumber", partitionNumber);
+                    m.put("controlPlane", entry.getKey());
+                    m.put("applications", minimalApps);
                     return m;
                 })
                 .collect(Collectors.toList());

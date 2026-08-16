@@ -8,17 +8,21 @@
 
   ArgoCD then evaluates the literal using goTemplate (spec.goTemplate: true).
 
-  goTemplate is required because the projects field is a native JSON array
-  from the plugin.  With goTemplate, {{ .projects | toJson }} serialises it
-  to a proper JSON string that Helm receives as .Values.projects.
-  The downstream chart (project-registration) parses it back with
+  goTemplate is required because the applications field is a native JSON array
+  from the plugin.  With goTemplate, {{ .applications | toJson }} serialises it
+  to a proper JSON string that Helm receives as .Values.applications.
+  The downstream chart (application-registration) parses it back with
   fromJsonArray (Helm built-in that correctly handles JSON arrays, unlike
   fromJson / fromYaml which both unmarshal into map[string]interface{}).
+
+  Each application entry carries a nested sources array.  fromJsonArray on
+  the outer list gives a Go slice; .sources within each element is
+  automatically a []interface{} that range can iterate in the leaf chart.
 */ -}}
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: project-partition-{{ .Values.partitionNumber }}-groups-appset
+  name: application-partition-{{ .Values.partitionNumber }}-groups-appset
   namespace: argocd
   annotations:
     argocd-platform/partition-number: "{{ .Values.partitionNumber }}"
@@ -34,12 +38,12 @@ spec:
           name: argocd-platform-plugin
         input:
           parameters:
-            resource: "project-groups"
+            resource: "application-groups"
             partitionNumber: "{{ .Values.partitionNumber }}"
 
   template:
     metadata:
-      name: 'project-partition-{{ .Values.partitionNumber }}-{{ "{{ .controlPlane }}" }}'
+      name: 'application-partition-{{ .Values.partitionNumber }}-{{ "{{ .controlPlane }}" }}'
 
     spec:
       project: default
@@ -47,12 +51,12 @@ spec:
       source:
         repoURL: {{ .Values.repoURL }}
         targetRevision: {{ .Values.targetRevision }}
-        path: charts/project-registration
+        path: charts/application-registration
         helm:
           valuesObject:
             partitionNumber: {{ .Values.partitionNumber }}
             controlPlane: '{{ "{{ .controlPlane }}" }}'
-            projects: '{{ "{{ .projects | toJson }}" }}'
+            applications: '{{ "{{ .applications | toJson }}" }}'
 
       destination:
         name: '{{ "{{ .controlPlane }}" }}'

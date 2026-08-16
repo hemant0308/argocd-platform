@@ -1,0 +1,15 @@
+# Partition number — injected from the inner application-partition ApplicationSet.
+partitionNumber: ""
+
+# Name of the control plane this Application is deployed to (e.g. "cp-1").
+# Used as a label on each ArgoCD Application for filtering and auditing.
+controlPlane: ""
+
+# JSON array of applications to create:
+#   '[{"name":"my-app","project":"my-project","cluster":"cluster-1",
+#      "sources":[{"repoUrl":"...","revision":"main","path":"charts/foo"}]}, ...]'
+#
+# Serialised by ArgoCD goTemplate ({{ .applications | toJson }}) from the native
+# array returned by the application-groups plugin.  Default is an empty JSON array
+# so that 'helm template' works without a -f values file.
+applications: "[]"

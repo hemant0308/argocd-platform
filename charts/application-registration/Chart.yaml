@@ -1,0 +1,10 @@
+apiVersion: v2
+name: application-registration
+description: >
+  Creates ArgoCD Application resources on a target control plane.
+  One Application is created per entry in the applications list.
+  Each Application supports multiple sources (spec.sources).
+  Deployed to the target control plane cluster by an Application
+  generated from charts/application-partition.
+type: application
+version: 1.0.0

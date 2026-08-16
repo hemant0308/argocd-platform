@@ -1,5 +1,5 @@
 apiVersion: v2
-name: appproject
+name: project-registration
 description: >
   Creates ArgoCD AppProject resources on a target control plane.
   One AppProject is created per project entry in the projects list.

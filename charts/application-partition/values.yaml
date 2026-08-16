@@ -1,0 +1,4 @@
+partitionNumber: ""
+generation: ""
+repoURL: https://github.com/hemant0308/argocd-platform.git
+targetRevision: main

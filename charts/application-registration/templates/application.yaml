@@ -1,0 +1,57 @@
+{{- /*
+  Creates one ArgoCD Application per entry in .Values.applications.
+
+  .Values.applications is a JSON array string serialised by the inner
+  application-partition ApplicationSet via {{ .applications | toJson }}.
+
+  fromJsonArray (Helm built-in) correctly parses JSON arrays into a Go slice.
+  Use this instead of fromJson or fromYaml — both unmarshal into
+  map[string]interface{} in Helm 3.x and fail for top-level JSON arrays.
+
+  Inside the outer range:
+    .          = current application item  { name, project, cluster, sources }
+    .sources   = []interface{} — range-able without any further parsing
+    $.Values   = chart-level values  { partitionNumber, controlPlane, applications }
+
+  Multi-source support: spec.sources (plural) is used unconditionally.
+  ArgoCD 2.6+ supports multi-source Applications; a single-source app is
+  expressed as a one-element sources list.
+*/ -}}
+{{- range fromJsonArray .Values.applications }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {{ .name }}
+  namespace: argocd
+  labels:
+    argocd-platform/partition: "{{ $.Values.partitionNumber }}"
+    argocd-platform/control-plane: "{{ $.Values.controlPlane }}"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: {{ .project }}
+
+  sources:
+    {{- range .sources }}
+    - repoURL: {{ .repoUrl }}
+      targetRevision: {{ .revision }}
+      {{- if .path }}
+      path: {{ .path }}
+      {{- end }}
+      {{- if .chart }}
+      chart: {{ .chart }}
+      {{- end }}
+    {{- end }}
+
+  destination:
+    name: {{ .cluster }}
+    namespace: argocd
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+{{- end }}
