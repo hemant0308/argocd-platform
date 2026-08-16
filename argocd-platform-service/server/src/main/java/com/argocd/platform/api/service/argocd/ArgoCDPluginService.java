@@ -185,8 +185,28 @@ public class ArgoCDPluginService {
                         "No project partition found with partitionNumber: " + partitionNumber));
 
         List<ProjectItem> projectItems = projectRepository.findByPartitionId(partitionId);
-        List<Map<String, String>> minimalProjects = projectItems.stream()
-                .map(p -> Map.of("name", p.getName()))
+
+        // Build the project list carrying cluster assignments for destination generation.
+        // Each project map: { name, clusters: [{ name, namespaces }] }
+        List<Map<String, Object>> minimalProjects = projectItems.stream()
+                .map(p -> {
+                    List<Map<String, Object>> clusterMaps = p.getClusters() == null ? List.of()
+                            : p.getClusters().stream()
+                                    .map(c -> {
+                                        Map<String, Object> cm = new LinkedHashMap<>();
+                                        cm.put("name", c.getName());
+                                        // null/empty → Helm template emits namespace: '*'
+                                        cm.put("namespaces",
+                                                c.getNamespaces() != null ? c.getNamespaces() : List.of());
+                                        return cm;
+                                    })
+                                    .collect(Collectors.toList());
+
+                    Map<String, Object> pm = new LinkedHashMap<>();
+                    pm.put("name", p.getName());
+                    pm.put("clusters", clusterMaps);
+                    return pm;
+                })
                 .collect(Collectors.toList());
 
         List<String> cpNames = controlPlaneRepository.findAll().stream()

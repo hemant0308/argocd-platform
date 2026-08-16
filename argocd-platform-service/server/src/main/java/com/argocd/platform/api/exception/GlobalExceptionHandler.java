@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -176,6 +177,63 @@ public class GlobalExceptionHandler {
                 .build();
 
         return ResponseEntity.badRequest().body(body);
+    }
+
+    // -------------------------------------------------------------------------
+    // 409 — Resource already exists (duplicate unique field)
+    // -------------------------------------------------------------------------
+
+    @ExceptionHandler(ResourceAlreadyExistsException.class)
+    public ResponseEntity<ErrorResponse> handleResourceAlreadyExists(
+            ResourceAlreadyExistsException ex,
+            HttpServletRequest request) {
+
+        ErrorResponse body = ErrorResponse.builder()
+                .timestamp(LocalDateTime.now())
+                .status(HttpStatus.CONFLICT.value())
+                .error(HttpStatus.CONFLICT.getReasonPhrase())
+                .message(ex.getMessage())
+                .path(request.getRequestURI())
+                .build();
+
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+    }
+
+    /**
+     * Catches DB-level unique-constraint violations that slip past the service-layer
+     * pre-check (e.g., concurrent inserts). Translates them to 409 so callers never
+     * see a 500 for a duplicate-name race.
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(
+            DataIntegrityViolationException ex,
+            HttpServletRequest request) {
+
+        String rootMsg = ex.getMostSpecificCause().getMessage();
+        boolean isUniqueViolation = rootMsg != null
+                && rootMsg.contains("duplicate key value violates unique constraint");
+
+        if (isUniqueViolation) {
+            log.debug("Unique constraint violation on {} {}: {}", request.getMethod(), request.getRequestURI(), rootMsg);
+            ErrorResponse body = ErrorResponse.builder()
+                    .timestamp(LocalDateTime.now())
+                    .status(HttpStatus.CONFLICT.value())
+                    .error(HttpStatus.CONFLICT.getReasonPhrase())
+                    .message("A resource with the same unique identifier already exists.")
+                    .path(request.getRequestURI())
+                    .build();
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+        }
+
+        log.error("Data integrity violation on {} {}", request.getMethod(), request.getRequestURI(), ex);
+        ErrorResponse body = ErrorResponse.builder()
+                .timestamp(LocalDateTime.now())
+                .status(HttpStatus.INTERNAL_SERVER_ERROR.value())
+                .error(HttpStatus.INTERNAL_SERVER_ERROR.getReasonPhrase())
+                .message("An unexpected error occurred. Please contact the platform team.")
+                .path(request.getRequestURI())
+                .build();
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(body);
     }
 
     // -------------------------------------------------------------------------

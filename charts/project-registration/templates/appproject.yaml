@@ -9,8 +9,15 @@
   map[string]interface{} in Helm 3.x and fail for top-level JSON arrays.
 
   Inside the range:
-    .        = current project item  { name }
+    .        = current project item  { name, clusters: [{name, namespaces}] }
     $.Values = chart-level values    { partitionNumber, controlPlane, projects }
+
+  destinations logic:
+    - If the project has clusters: one destination entry per cluster.
+      - If the cluster has namespaces: one entry per namespace (name+namespace pair).
+      - If the cluster has no namespaces: one entry with namespace: '*'.
+    - If the project has no clusters: fall back to server: '*' / namespace: '*'
+      so the AppProject is valid and can be tightened once clusters are added.
 */ -}}
 {{- range fromJsonArray .Values.projects }}
 ---
@@ -29,8 +36,23 @@ spec:
   sourceRepos:
     - '*'
   destinations:
+    {{- if .clusters }}
+    {{- range .clusters }}
+    {{- $clusterName := .name }}
+    {{- if .namespaces }}
+    {{- range .namespaces }}
+    - name: {{ $clusterName | quote }}
+      namespace: {{ . | quote }}
+    {{- end }}
+    {{- else }}
+    - name: {{ $clusterName | quote }}
+      namespace: '*'
+    {{- end }}
+    {{- end }}
+    {{- else }}
     - namespace: '*'
       server: '*'
+    {{- end }}
   clusterResourceWhitelist:
     - group: '*'
       kind: '*'

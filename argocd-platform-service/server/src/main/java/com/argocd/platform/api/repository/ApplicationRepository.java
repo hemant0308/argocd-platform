@@ -51,14 +51,13 @@ public class ApplicationRepository {
     }
 
     /**
-     * Updates name, cluster_id, generation, and sources.
-     * Partition assignment and project_id are intentionally excluded from updates.
+     * Updates cluster_id, generation, and sources.
+     * Name, partition assignment, and project_id are intentionally excluded from updates.
      *
      * @return the updated entity with refreshed updated_at
      */
     public ApplicationsEntity update(UUID id, ApplicationsEntity entity, List<Map<String, Object>> sources) {
         return dsl.update(APPLICATIONS)
-                .set(APPLICATIONS.NAME, entity.getName())
                 .set(APPLICATIONS.CLUSTER_ID, entity.getClusterId())
                 .set(APPLICATIONS.GENERATION, entity.getGeneration())
                 .set(SOURCES, toJsonb(sources))

@@ -3,6 +3,7 @@ package com.argocd.platform.api.service;
 import com.argocd.platform.api.assignment.ControlPlaneResolver;
 import com.argocd.platform.api.config.PartitionProperties;
 import com.argocd.platform.api.exception.InvalidRequestException;
+import com.argocd.platform.api.exception.ResourceAlreadyExistsException;
 import com.argocd.platform.api.exception.ResourceNotFoundException;
 import com.argocd.platform.api.model.assignment.ControlPlaneAssignmentAlgorithm;
 import com.argocd.platform.api.model.request.ClusterRequest;
@@ -67,6 +68,12 @@ public class ClusterService {
 
     @Transactional
     public ClusterResponse create(ClusterRequest request) {
+        // Reject duplicates before hitting the DB unique constraint
+        if (clusterRepository.findByName(request.getName()).isPresent()) {
+            throw new ResourceAlreadyExistsException(
+                    "Cluster with name '" + request.getName() + "' already exists.");
+        }
+
         // Always resolve control plane on create — reassignControlPlane is update-only
         UUID controlPlaneId = resolveControlPlaneId(request);
 
@@ -98,9 +105,8 @@ public class ClusterService {
                 ? resolveControlPlaneId(request)
                 : existing.getControlPlaneId();
 
-        // Partition assignment is never changed via the API
-        existing.setName(request.getName())
-                .setServer(request.getServer())
+        // Partition assignment and name are never changed via the API
+        existing.setServer(request.getServer())
                 .setControlPlaneId(controlPlaneId)
                 .setNamespaces(toJsonb(request.getNamespaces()))
                 .setLabels(toJsonb(request.getLabels()))

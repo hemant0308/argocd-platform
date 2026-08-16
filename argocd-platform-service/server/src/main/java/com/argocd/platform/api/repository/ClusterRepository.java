@@ -56,14 +56,13 @@ public class ClusterRepository {
     }
 
     /**
-     * Updates name, server, control_plane_id, and JSONB fields.
-     * Partition assignment is intentionally excluded from updates.
+     * Updates server, control_plane_id, and JSONB fields.
+     * Name and partition assignment are intentionally excluded from updates.
      *
      * @return the updated entity with refreshed updated_at
      */
     public ClustersEntity update(UUID id, ClustersEntity entity) {
         return dsl.update(CLUSTERS)
-                .set(CLUSTERS.NAME, entity.getName())
                 .set(CLUSTERS.SERVER, entity.getServer())
                 .set(CLUSTERS.CONTROL_PLANE_ID, entity.getControlPlaneId())
                 .set(CLUSTERS.NAMESPACES, entity.getNamespaces())

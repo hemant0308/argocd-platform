@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 
 @Service
 @RequiredArgsConstructor
@@ -38,12 +39,16 @@ public class ApplicationService {
 
         validateClusterInProject(projectId, clusterId);
 
+        // Append a 5-hex-char suffix to guarantee global uniqueness of application names.
+        // The suffixed name is what ArgoCD sees and what is returned in the response.
+        String finalName = request.getName() + "-" + randomSuffix();
+
         // Resolve (or create) a stable application partition
         UUID partitionId = partitionRepository.resolvePartitionId(
                 PartitionType.APPLICATION, partitionProperties.getApplicationTargetSize());
 
         ApplicationsEntity entity = new ApplicationsEntity()
-                .setName(request.getName())
+                .setName(finalName)
                 .setProjectId(projectId)
                 .setClusterId(clusterId)
                 .setApplicationPartitionId(partitionId)
@@ -64,10 +69,9 @@ public class ApplicationService {
 
         validateClusterInProject(existing.getProjectId(), clusterId);
 
-        // Partition is NEVER changed from the API.
+        // Partition and name are NEVER changed from the API.
         // Increment generation to signal desired-state change to ApplicationSet.
-        existing.setName(request.getName())
-                .setClusterId(clusterId)
+        existing.setClusterId(clusterId)
                 .setGeneration(existing.getGeneration() + 1L);
 
         ApplicationsEntity updated = applicationRepository.update(id, existing, request.getSources());
@@ -130,6 +134,19 @@ public class ApplicationService {
                     .getId();
         }
         throw new InvalidRequestException("Either clusterId or clusterName must be provided");
+    }
+
+    // -------------------------------------------------------------------------
+    // Utility
+    // -------------------------------------------------------------------------
+
+    /**
+     * Generates a 5-character lowercase hex string (00000–fffff, ~1 M combinations)
+     * appended to the user-supplied base name to produce a globally unique ArgoCD
+     * application name without requiring an explicit uniqueness check.
+     */
+    private static String randomSuffix() {
+        return String.format("%05x", ThreadLocalRandom.current().nextInt(1 << 20));
     }
 
     private ApplicationResponse toResponse(ApplicationsEntity e) {

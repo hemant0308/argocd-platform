@@ -2,6 +2,7 @@ package com.argocd.platform.api.service;
 
 import com.argocd.platform.api.config.PartitionProperties;
 import com.argocd.platform.api.exception.InvalidRequestException;
+import com.argocd.platform.api.exception.ResourceAlreadyExistsException;
 import com.argocd.platform.api.exception.ResourceNotFoundException;
 import com.argocd.platform.api.model.request.ClusterReference;
 import com.argocd.platform.api.model.request.ProjectRequest;
@@ -33,6 +34,12 @@ public class ProjectService {
 
     @Transactional
     public ProjectResponse create(ProjectRequest request) {
+        // Reject duplicates before hitting the DB unique constraint
+        if (projectRepository.findByName(request.getName()).isPresent()) {
+            throw new ResourceAlreadyExistsException(
+                    "Project with name '" + request.getName() + "' already exists.");
+        }
+
         // Resolve cluster IDs from references (id takes precedence over name)
         List<UUID> clusterIds = resolveClusterIds(request.getClusters());
 
@@ -66,9 +73,8 @@ public class ProjectService {
         // Resolve cluster IDs from references
         List<UUID> clusterIds = resolveClusterIds(request.getClusters());
 
-        // Partition is NEVER changed from the API
-        existing.setName(request.getName())
-                .setDescription(request.getDescription());
+        // Partition and name are NEVER changed from the API
+        existing.setDescription(request.getDescription());
 
         ProjectsEntity updated = projectRepository.update(id, existing);
 
