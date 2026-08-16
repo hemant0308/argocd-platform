@@ -1,0 +1,51 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cluster-partitions
+  namespace: argocd
+
+spec:
+  generators:
+    - plugin:
+        configMapRef:
+          name: argocd-platform-plugin
+        input:
+          parameters:
+            resource: "cluster-partitions"
+
+  template:
+    metadata:
+      name: 'cluster-partition-{{partitionNumber}}'
+      annotations:
+        argocd-platform/generation: '{{generation}}'
+        argocd-platform/cluster-count: '{{clusterCount}}'
+
+    spec:
+      project: default
+
+      source:
+        repoURL: https://github.com/hemant0308/argocd-platform.git
+        targetRevision: main
+        path: charts/cluster-partition
+        helm:
+          valuesObject:
+            # Partition identity — passed through to the inner ApplicationSet
+            # so the cluster-groups plugin knows which partition to query.
+            partitionNumber: '{{partitionNumber}}'
+            # Generation is included as a Helm value so that any change in
+            # partition membership (which bumps generation in the DB) causes
+            # this Application to re-sync and re-render the inner ApplicationSet.
+            generation: '{{generation}}'
+
+      # Deploy to the managed ArgoCD cluster itself — the chart renders an
+      # ApplicationSet resource that lives on the managed control plane.
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: argocd
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

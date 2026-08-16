@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-platform-plugin
+  namespace: argocd
+data:
+  # ArgoCD ApplicationSet Plugin Generator protocol:
+  # ArgoCD will POST to {baseUrl}/api/v1/getparams.execute
+  # The path suffix is fixed by the protocol — do not append it here.
+  #
+  # Set input.parameters.resource in each ApplicationSet generator block
+  # to select the data source:
+  #   cluster-partitions  — list all cluster partitions
+  #   cluster-groups      — clusters in a partition grouped by control plane (requires partitionNumber)
+  #   project-partitions  — list all project partitions with control planes
+  #   projects            — projects in a partition (requires partitionNumber)
+  baseUrl: "http://argocd-platform-service.argocd.svc.cluster.local:8080"
