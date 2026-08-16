@@ -1,0 +1,115 @@
+server:
+  port: 8080
+
+spring:
+  profiles:
+    default: local
+  application:
+    name: argocd-platform-service
+
+  main:
+    web-application-type: servlet
+
+  # ----------------------------------------------------------------
+  # DataSource — Spring Boot auto-configures HikariCP + DSLContext.
+  # Override via environment variables in non-local environments.
+  # ----------------------------------------------------------------
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:argocd_platform}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:q1}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      minimum-idle: ${DB_MIN_IDLE:2}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT:30000}
+      idle-timeout: ${DB_IDLE_TIMEOUT:600000}
+      max-lifetime: ${DB_MAX_LIFETIME:1800000}
+      connection-init-sql: SET TIME ZONE 'UTC'
+
+  # ----------------------------------------------------------------
+  # Liquibase — runs migrations on startup using the changelog
+  # bundled inside the argocd-platform-service-db JAR on classpath.
+  # ----------------------------------------------------------------
+  liquibase:
+    enabled: ${LIQUIBASE_ENABLED:true}
+    change-log: classpath:db/changelog/db.changelog-master.xml
+    default-schema: public
+    drop-first: ${LIQUIBASE_DROP_FIRST:false}
+
+  # ----------------------------------------------------------------
+  # jOOQ — DSLContext is auto-configured by spring-boot-starter-jooq
+  # using the DataSource defined above. No extra bean required.
+  # ----------------------------------------------------------------
+  jooq:
+    sql-dialect: POSTGRES
+
+  jackson:
+    time-zone: UTC
+    serialization:
+      indent-output: true
+      write-dates-as-timestamps: false
+    deserialization:
+      fail-on-unknown-properties: false
+    default-property-inclusion: non_null
+
+# ----------------------------------------------------------------
+# Actuator
+# ----------------------------------------------------------------
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: always
+  health:
+    defaults:
+      enabled: true
+
+# ----------------------------------------------------------------
+# OpenAPI / Swagger UI
+# Swagger UI : http://localhost:8080/swagger-ui/index.html
+# OpenAPI JSON: http://localhost:8080/api-docs
+# ----------------------------------------------------------------
+springdoc:
+  api-docs:
+    enabled: true
+    path: /api-docs
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui/index.html
+    operations-sorter: method
+    tags-sorter: alpha
+    try-it-out-enabled: true
+    disable-swagger-default-url: true
+  packages-to-scan: com.argocd.platform.api.controller
+  show-actuator: false
+
+# ----------------------------------------------------------------
+# Partition configuration
+# Each resource type has an independent target size.  The partition
+# repository uses this value as the threshold before creating a new
+# partition bucket.  Partition assignments are permanent — they are
+# never changed via API after initial assignment.
+# ----------------------------------------------------------------
+argocd:
+  partition:
+    project-target-size: ${PARTITION_PROJECT_SIZE:100}
+    cluster-target-size: ${PARTITION_CLUSTER_SIZE:100}
+    application-target-size: ${PARTITION_APPLICATION_SIZE:100}
+
+# ----------------------------------------------------------------
+# Logging
+# ----------------------------------------------------------------
+logging:
+  level:
+    root: INFO
+    com.argocd.platform: DEBUG
+    org.jooq.tools.LoggerListener: DEBUG
+    org.springframework.web: INFO
+    org.liquibase: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
+
+    <!-- =========================================================
+         Add namespaces and labels JSONB columns to clusters.
+         namespaces: list of namespace names / ArgoCD glob patterns
+                     that this cluster registration is scoped to.
+                     NULL means the cluster is not namespace-scoped
+                     (ArgoCD default: cluster-level access).
+         labels:     key/value labels following Kubernetes label
+                     conventions — used for selector-based routing.
+         ========================================================= -->
+    <changeSet id="v1.0.1-add-cluster-jsonb-fields" author="argocd-platform">
+        <addColumn tableName="clusters">
+            <column name="namespaces" type="JSONB">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+        <addColumn tableName="clusters">
+            <column name="labels" type="JSONB">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="clusters" columnName="namespaces"/>
+            <dropColumn tableName="clusters" columnName="labels"/>
+        </rollback>
+    </changeSet>
+
+    <!-- =========================================================
+         Fix status column DB defaults from ACTIVE → UNKNOWN.
+         The application layer already sets UNKNOWN on creation;
+         aligning the DB default prevents orphaned ACTIVE rows
+         if a record is ever inserted outside the service.
+         ========================================================= -->
+    <changeSet id="v1.0.1-fix-status-defaults" author="argocd-platform">
+        <addDefaultValue tableName="control_planes"       columnName="status" defaultValue="UNKNOWN" columnDataType="VARCHAR(50)"/>
+        <addDefaultValue tableName="project_partitions"   columnName="status" defaultValue="UNKNOWN" columnDataType="VARCHAR(50)"/>
+        <addDefaultValue tableName="cluster_partitions"   columnName="status" defaultValue="UNKNOWN" columnDataType="VARCHAR(50)"/>
+        <addDefaultValue tableName="application_partitions" columnName="status" defaultValue="UNKNOWN" columnDataType="VARCHAR(50)"/>
+        <addDefaultValue tableName="users"                columnName="status" defaultValue="UNKNOWN" columnDataType="VARCHAR(50)"/>
+        <addDefaultValue tableName="projects"             columnName="status" defaultValue="UNKNOWN" columnDataType="VARCHAR(50)"/>
+        <addDefaultValue tableName="clusters"             columnName="status" defaultValue="UNKNOWN" columnDataType="VARCHAR(50)"/>
+        <addDefaultValue tableName="project_clusters"     columnName="status" defaultValue="UNKNOWN" columnDataType="VARCHAR(50)"/>
+        <addDefaultValue tableName="applications"         columnName="status" defaultValue="UNKNOWN" columnDataType="VARCHAR(50)"/>
+        <rollback>
+            <addDefaultValue tableName="control_planes"       columnName="status" defaultValue="ACTIVE" columnDataType="VARCHAR(50)"/>
+            <addDefaultValue tableName="project_partitions"   columnName="status" defaultValue="ACTIVE" columnDataType="VARCHAR(50)"/>
+            <addDefaultValue tableName="cluster_partitions"   columnName="status" defaultValue="ACTIVE" columnDataType="VARCHAR(50)"/>
+            <addDefaultValue tableName="application_partitions" columnName="status" defaultValue="ACTIVE" columnDataType="VARCHAR(50)"/>
+            <addDefaultValue tableName="users"                columnName="status" defaultValue="ACTIVE" columnDataType="VARCHAR(50)"/>
+            <addDefaultValue tableName="projects"             columnName="status" defaultValue="ACTIVE" columnDataType="VARCHAR(50)"/>
+            <addDefaultValue tableName="clusters"             columnName="status" defaultValue="ACTIVE" columnDataType="VARCHAR(50)"/>
+            <addDefaultValue tableName="project_clusters"     columnName="status" defaultValue="ACTIVE" columnDataType="VARCHAR(50)"/>
+            <addDefaultValue tableName="applications"         columnName="status" defaultValue="ACTIVE" columnDataType="VARCHAR(50)"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -1,0 +1,45 @@
+package com.argocd.platform.api.model.response;
+
+import com.argocd.platform.api.model.auth.ClusterAuth;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class ClusterResponse {
+
+    private UUID id;
+    private String name;
+    private String server;
+    private String status;
+    private UUID controlPlaneId;
+    private String controlPlaneName;
+    private Integer clusterPartitionNumber;
+
+    /** Namespace names / glob patterns this cluster is scoped to. {@code null} = cluster-level. */
+    private List<String> namespaces;
+
+    /** Kubernetes-style labels attached to this cluster registration. */
+    private Map<String, String> labels;
+
+    /**
+     * Authentication configuration used to connect to this cluster's API server.
+     * {@code null} when no auth is configured.
+     *
+     * <p><b>Note:</b> sensitive fields (e.g. {@code token}) are returned as-is.
+     * Consider masking them in a future iteration if credentials are stored long-term.
+     */
+    private ClusterAuth auth;
+
+    private LocalDateTime createdAt;
+    private LocalDateTime updatedAt;
+}

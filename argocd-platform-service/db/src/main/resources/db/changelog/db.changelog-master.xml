@@ -6,5 +6,7 @@
     http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
 
     <include file="db/changelog/changes/v1.0.0-initial-schema.xml"/>
+    <include file="db/changelog/changes/v1.0.1-add-cluster-fields.xml"/>
+    <include file="db/changelog/changes/v1.0.2-add-cluster-auth.xml"/>
 
 </databaseChangeLog>

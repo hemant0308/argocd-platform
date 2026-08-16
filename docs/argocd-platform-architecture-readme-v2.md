@@ -201,15 +201,19 @@ This represents which clusters are associated with which projects.
 | `project_id` | Owning project |
 | `cluster_id` | Target user cluster |
 | `application_partition_id` | Stable application partition |
-| `control_plane_id` | Current ArgoCD control plane |
 | `status` | Lifecycle state |
 | `generation` | Desired-state generation |
 | `created_at` | Creation timestamp |
 | `updated_at` | Last update |
 
-Application partition and control-plane assignment are independent.
+> **Design decision:** `control_plane_id` is intentionally absent from the `applications` table.
+> The control plane is derived transitively via `application → cluster → control_plane`.
+> Moving an application to a different control plane is achieved by updating `cluster.control_plane_id`,
+> which propagates automatically — no redundant FK on each application record is needed.
 
-An application can move from CP-1 to CP-2 without changing its application partition.
+Application partition assignment is independent of the cluster's control-plane assignment.
+
+An application's partition does not change when its cluster is reassigned to a different control plane.
 
 ---
 
@@ -555,8 +559,7 @@ An application has:
 ```text
 project
 application partition
-cluster
-control plane
+cluster  (control plane is derived via cluster → control_plane)
 ```
 
 These represent different concepts:
@@ -565,8 +568,8 @@ These represent different concepts:
 |---|---|
 | Project | Ownership/authorization |
 | Application Partition | ArgoCD reconciliation/scaling partition |
-| Cluster | Deployment destination |
-| Control Plane | ArgoCD execution location |
+| Cluster | Deployment destination (carries the `control_plane_id` FK) |
+| Control Plane | ArgoCD execution location — reached transitively via the cluster |
 
 Example:
 
@@ -1537,7 +1540,9 @@ User workloads
 
 # 25. Failover model
 
-Control-plane assignment is stored in PostgreSQL.
+Control-plane assignment is stored on the `clusters` table (`control_plane_id`).
+Because applications reference their cluster, the control plane is derived transitively —
+there is no `control_plane_id` column on the `applications` table.
 
 Example:
 
@@ -1547,7 +1552,7 @@ cluster-002 → CP-1
 cluster-003 → CP-2
 ```
 
-If CP-1 becomes unavailable:
+If CP-1 becomes unavailable, only the cluster records are updated:
 
 ```text
 cluster-001 → CP-2
@@ -1555,9 +1560,8 @@ cluster-002 → CP-2
 cluster-003 → CP-2
 ```
 
-The application records can similarly update their `control_plane_id`.
-
-The relevant Application Partition API then exposes the new destination.
+The Application Partition API resolves each application's control plane by joining
+`applications → clusters → control_planes`, and exposes the new destination.
 
 The generated Applications reconcile toward the new control plane.
 
@@ -1569,10 +1573,10 @@ Therefore:
 Control-plane failure
        │
        ▼
-change control_plane_id
+update cluster.control_plane_id
        │
        ▼
-Routing API reflects new destination
+Routing API reflects new destination (via cluster join)
        │
        ▼
 ApplicationSet reconciliation

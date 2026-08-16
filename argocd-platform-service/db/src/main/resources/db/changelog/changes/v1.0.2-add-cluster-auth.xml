@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
+
+    <!-- =========================================================
+         Add auth JSONB column to clusters.
+         Stores authentication credentials for connecting to the
+         Kubernetes API server. Structure:
+           { "type": "BEARER", "token": "..." }
+         New auth types (CERTIFICATE, KUBECONFIG, etc.) will extend
+         this object with type-specific fields.
+         NULL means no auth is configured (use-case: in-cluster).
+         ========================================================= -->
+    <changeSet id="v1.0.2-add-cluster-auth" author="argocd-platform">
+        <addColumn tableName="clusters">
+            <column name="auth" type="JSONB">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="clusters" columnName="auth"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>
