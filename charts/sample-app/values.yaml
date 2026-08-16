@@ -1,0 +1,20 @@
+# Name of the Deployment (and its Pods).
+name: sample-app
+
+# Labels applied to the Deployment, Pod template, and Service.
+labels:
+  app: sample-app
+  env: dev
+  team: platform
+
+# Container image.
+image:
+  repository: nginx
+  tag: "1.27"
+  pullPolicy: IfNotPresent
+
+# Number of replicas.
+replicaCount: 1
+
+# Container port exposed by nginx.
+containerPort: 80

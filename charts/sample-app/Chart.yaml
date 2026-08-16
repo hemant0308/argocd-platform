@@ -1,0 +1,8 @@
+apiVersion: v2
+name: sample-app
+description: >
+  Simple sample application chart for testing the ArgoCD platform pipeline.
+  Deploys a single nginx Deployment with configurable name and labels.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
