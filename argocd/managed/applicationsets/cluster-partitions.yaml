@@ -12,6 +12,7 @@ spec:
         input:
           parameters:
             resource: "cluster-partitions"
+        requeueAfterSeconds: 1
 
   template:
     metadata:

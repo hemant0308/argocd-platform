@@ -29,6 +29,7 @@ spec:
 
   generators:
     - plugin:
+        requeueAfterSeconds: 1
         configMapRef:
           name: argocd-platform-plugin
         input:
