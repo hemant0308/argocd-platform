@@ -96,6 +96,20 @@ public class ProjectRepository {
     }
 
     /**
+     * Returns {@code true} if the given cluster is associated with the given project
+     * via the {@code project_clusters} join table.
+     *
+     * <p>Used by {@code ApplicationService} to validate that an application's target
+     * cluster belongs to the application's project before persisting the record.
+     */
+    public boolean isClusterInProject(UUID projectId, UUID clusterId) {
+        return dsl.fetchExists(
+                PROJECT_CLUSTERS,
+                PROJECT_CLUSTERS.PROJECT_ID.eq(projectId)
+                        .and(PROJECT_CLUSTERS.CLUSTER_ID.eq(clusterId)));
+    }
+
+    /**
      * Returns all projects in the given partition ordered by name.
      * Unknown {@code partitionId} returns an empty list.
      */

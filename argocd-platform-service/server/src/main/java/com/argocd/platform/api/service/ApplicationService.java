@@ -39,6 +39,8 @@ public class ApplicationService {
         UUID projectId = resolveProjectId(request);
         UUID clusterId = resolveClusterId(request);
 
+        validateClusterInProject(projectId, clusterId);
+
         // Resolve (or create) a stable application partition
         UUID partitionId = partitionRepository.resolvePartitionId(
                 PartitionType.APPLICATION, partitionProperties.getApplicationTargetSize());
@@ -67,6 +69,8 @@ public class ApplicationService {
 
         UUID clusterId = resolveClusterId(request);
 
+        validateClusterInProject(existing.getProjectId(), clusterId);
+
         // Partition is NEVER changed from the API.
         // Increment generation to signal desired-state change to ApplicationSet.
         existing.setName(request.getName())
@@ -80,6 +84,21 @@ public class ApplicationService {
         applicationSourceRepository.saveAll(buildSourceEntities(id, request));
 
         return toResponse(updated);
+    }
+
+    /**
+     * Validates that the given cluster is associated with the given project via
+     * {@code project_clusters}. Throws {@link InvalidRequestException} if not.
+     *
+     * <p>This ensures an application can only target clusters that the project
+     * has explicit access to, preventing cross-project cluster usage.
+     */
+    private void validateClusterInProject(UUID projectId, UUID clusterId) {
+        if (!projectRepository.isClusterInProject(projectId, clusterId)) {
+            throw new InvalidRequestException(
+                    "Cluster '" + clusterId + "' is not part of project '" + projectId + "'. " +
+                    "Add the cluster to the project before creating an application targeting it.");
+        }
     }
 
     /**
