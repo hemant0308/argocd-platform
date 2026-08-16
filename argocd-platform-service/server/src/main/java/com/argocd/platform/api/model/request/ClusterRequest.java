@@ -1,10 +1,8 @@
 package com.argocd.platform.api.model.request;
 
 import com.argocd.platform.api.model.assignment.ControlPlaneAssignmentAlgorithm;
-import com.argocd.platform.api.model.auth.ClusterAuth;
 import com.argocd.platform.api.validation.ValidK8sLabels;
 import com.argocd.platform.api.validation.ValidNamespacePatterns;
-import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -87,16 +85,8 @@ public class ClusterRequest {
 
     /**
      * Optional authentication configuration for connecting to the Kubernetes API server.
-     * <p>
-     * When provided, {@code auth.type} is required and type-specific fields must be present:
-     * <ul>
-     *   <li>{@code BEARER} — {@code auth.token} must not be blank</li>
-     * </ul>
+     * Accepted as a free-form JSON object — any shape is stored and returned as-is.
      * When {@code null}, no auth is configured (e.g. in-cluster service account).
-     * <p>
-     * {@code @Valid} cascades Bean Validation into the {@link ClusterAuth} object;
-     * {@link ClusterAuth} itself carries {@code @ValidClusterAuth} for type-specific rules.
      */
-    @Valid
-    private ClusterAuth auth;
+    private Map<String, Object> auth;
 }

@@ -2,28 +2,42 @@ package com.argocd.platform.api.repository;
 
 import com.argocd.platform.api.model.response.argocd.ClusterItem;
 import com.argocd.platform.db.jooq.tables.pojos.ClustersEntity;
-import lombok.RequiredArgsConstructor;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.extern.slf4j.Slf4j;
 import org.jooq.DSLContext;
 import org.jooq.Field;
+import org.jooq.JSONB;
 import org.jooq.impl.DSL;
 import org.springframework.stereotype.Repository;
 
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 import static com.argocd.platform.db.jooq.Tables.CLUSTERS;
 import static com.argocd.platform.db.jooq.Tables.CONTROL_PLANES;
 
+@Slf4j
 @Repository
-@RequiredArgsConstructor
 public class ClusterRepository {
 
+    private static final TypeReference<LinkedHashMap<String, Object>> AUTH_TYPE =
+            new TypeReference<>() {};
+
     private final DSLContext dsl;
+    private final ObjectMapper objectMapper;
+
+    public ClusterRepository(DSLContext dsl, ObjectMapper objectMapper) {
+        this.dsl = dsl;
+        this.objectMapper = objectMapper;
+    }
 
     /**
-     * Inserts a new cluster. The {@code clusterPartitionId} must be set on the entity
-     * before calling this method (resolved by the service via PartitionRepository).
+     * Inserts a new cluster.
      *
      * @return the saved entity with id and timestamps populated from the DB
      */
@@ -75,13 +89,13 @@ public class ClusterRepository {
 
     /**
      * Returns all clusters in the given partition ordered by name, enriched with their
-     * control-plane name. LEFT JOIN on {@code control_planes} so clusters without a
-     * control-plane assignment are still returned with {@code controlPlane = null}.
-     * Unknown {@code partitionId} returns an empty list.
+     * control-plane name. The auth JSONB is deserialised as-is into {@code config}
+     * and passed verbatim to the cluster-registration Helm chart.
      */
     public List<ClusterItem> findByPartitionId(UUID partitionId) {
         Field<String> cpNameField = CONTROL_PLANES.NAME.as("cp_name");
-        return dsl.select(CLUSTERS.NAME, CLUSTERS.SERVER, cpNameField)
+
+        return dsl.select(CLUSTERS.NAME, CLUSTERS.SERVER, CLUSTERS.AUTH, cpNameField)
                 .from(CLUSTERS)
                 .leftJoin(CONTROL_PLANES).on(CONTROL_PLANES.ID.eq(CLUSTERS.CONTROL_PLANE_ID))
                 .where(CLUSTERS.CLUSTER_PARTITION_ID.eq(partitionId))
@@ -90,6 +104,30 @@ public class ClusterRepository {
                         .name(r.get(CLUSTERS.NAME))
                         .server(r.get(CLUSTERS.SERVER))
                         .controlPlane(r.get(cpNameField))
+                        .config(fromJsonb(r.get(CLUSTERS.AUTH)))
                         .build());
+    }
+
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
+    public JSONB toJsonb(Object value) {
+        if (value == null) return null;
+        try {
+            return JSONB.jsonb(objectMapper.writeValueAsString(value));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize to JSONB: " + e.getMessage(), e);
+        }
+    }
+
+    private Map<String, Object> fromJsonb(JSONB jsonb) {
+        if (jsonb == null || jsonb.data() == null || jsonb.data().isBlank()) return null;
+        try {
+            return objectMapper.readValue(jsonb.data(), AUTH_TYPE);
+        } catch (JsonProcessingException e) {
+            log.warn("Failed to deserialize auth JSONB '{}': {}", jsonb.data(), e.getMessage());
+            return null;
+        }
     }
 }

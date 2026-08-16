@@ -126,8 +126,14 @@ public class ArgoCDPluginService {
 
         return byCp.entrySet().stream()
                 .map(entry -> {
-                    List<Map<String, String>> minimalClusters = entry.getValue().stream()
-                            .map(c -> Map.of("name", c.getName(), "server", c.getServer()))
+                    List<Map<String, Object>> minimalClusters = entry.getValue().stream()
+                            .map(c -> {
+                                Map<String, Object> cm = new LinkedHashMap<>();
+                                cm.put("name", c.getName());
+                                cm.put("server", c.getServer());
+                                cm.put("config", c.getConfig());
+                                return cm;
+                            })
                             .collect(Collectors.toList());
 
                     Map<String, Object> m = new LinkedHashMap<>();
@@ -247,22 +253,11 @@ public class ArgoCDPluginService {
                 .map(entry -> {
                     List<Map<String, Object>> minimalApps = entry.getValue().stream()
                             .map(a -> {
-                                List<Map<String, String>> sources = a.getSources().stream()
-                                        .map(s -> {
-                                            Map<String, String> sm = new LinkedHashMap<>();
-                                            sm.put("repoUrl", s.getRepoUrl());
-                                            sm.put("revision", s.getRevision());
-                                            if (s.getPath() != null)  sm.put("path", s.getPath());
-                                            if (s.getChart() != null) sm.put("chart", s.getChart());
-                                            return sm;
-                                        })
-                                        .collect(Collectors.toList());
-
                                 Map<String, Object> am = new LinkedHashMap<>();
                                 am.put("name", a.getName());
                                 am.put("project", a.getProject());
                                 am.put("cluster", a.getCluster());
-                                am.put("sources", sources);
+                                am.put("sources", a.getSources()); // free-form maps, passed verbatim
                                 return am;
                             })
                             .collect(Collectors.toList());

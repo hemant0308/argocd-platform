@@ -5,7 +5,6 @@ import com.argocd.platform.api.config.PartitionProperties;
 import com.argocd.platform.api.exception.InvalidRequestException;
 import com.argocd.platform.api.exception.ResourceNotFoundException;
 import com.argocd.platform.api.model.assignment.ControlPlaneAssignmentAlgorithm;
-import com.argocd.platform.api.model.auth.ClusterAuth;
 import com.argocd.platform.api.model.request.ClusterRequest;
 import com.argocd.platform.api.model.response.ClusterResponse;
 import com.argocd.platform.api.repository.ClusterRepository;
@@ -174,7 +173,7 @@ public class ClusterService {
                 .controlPlaneName(controlPlaneName)
                 .namespaces(fromJsonb(e.getNamespaces(), new TypeReference<List<String>>() {}))
                 .labels(fromJsonb(e.getLabels(), new TypeReference<Map<String, String>>() {}))
-                .auth(fromJsonb(e.getAuth(), new TypeReference<ClusterAuth>() {}))
+                .auth(fromJsonb(e.getAuth(), new TypeReference<Map<String, Object>>() {}))
                 .createdAt(e.getCreatedAt())
                 .updatedAt(e.getUpdatedAt())
                 .build();

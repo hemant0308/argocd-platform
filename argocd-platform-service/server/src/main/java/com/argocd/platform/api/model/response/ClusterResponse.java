@@ -1,6 +1,5 @@
 package com.argocd.platform.api.model.response;
 
-import com.argocd.platform.api.model.auth.ClusterAuth;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -33,12 +32,10 @@ public class ClusterResponse {
 
     /**
      * Authentication configuration used to connect to this cluster's API server.
+     * Stored and returned as a free-form JSON object — any shape is accepted.
      * {@code null} when no auth is configured.
-     *
-     * <p><b>Note:</b> sensitive fields (e.g. {@code token}) are returned as-is.
-     * Consider masking them in a future iteration if credentials are stored long-term.
      */
-    private ClusterAuth auth;
+    private Map<String, Object> auth;
 
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

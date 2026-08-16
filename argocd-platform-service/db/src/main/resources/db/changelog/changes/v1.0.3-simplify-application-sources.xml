@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
+
+    <!-- =========================================================
+         Drop application_sources table.
+         Sources are stored as a JSONB array directly on applications
+         so that any ArgoCD source shape is supported without schema
+         changes.  The FK on applications.id is dropped automatically
+         via CASCADE when the table is dropped.
+         ========================================================= -->
+    <changeSet id="v1.0.3-drop-application-sources" author="argocd-platform">
+        <dropTable tableName="application_sources" cascadeConstraints="true"/>
+        <rollback>
+            <createTable tableName="application_sources">
+                <column name="id" type="UUID" defaultValueComputed="uuid_generate_v4()">
+                    <constraints primaryKey="true" nullable="false"/>
+                </column>
+                <column name="application_id" type="UUID">
+                    <constraints nullable="false"/>
+                </column>
+                <column name="repo_url" type="VARCHAR(500)">
+                    <constraints nullable="false"/>
+                </column>
+                <column name="revision" type="VARCHAR(255)">
+                    <constraints nullable="false"/>
+                </column>
+                <column name="path" type="VARCHAR(500)"/>
+                <column name="chart" type="VARCHAR(255)"/>
+                <column name="values" type="TEXT"/>
+                <column name="source_order" type="INTEGER" defaultValueNumeric="0">
+                    <constraints nullable="false"/>
+                </column>
+                <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+                <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+            </createTable>
+        </rollback>
+    </changeSet>
+
+    <!-- =========================================================
+         Add sources JSONB column to applications.
+         Stores the full ArgoCD sources array as-is — no fixed schema.
+         ========================================================= -->
+    <changeSet id="v1.0.3-add-applications-sources" author="argocd-platform">
+        <addColumn tableName="applications">
+            <column name="sources" type="JSONB">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="applications" columnName="sources"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

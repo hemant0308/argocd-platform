@@ -5,17 +5,16 @@
   application-partition ApplicationSet via {{ .applications | toJson }}.
 
   fromJsonArray (Helm built-in) correctly parses JSON arrays into a Go slice.
-  Use this instead of fromJson or fromYaml — both unmarshal into
-  map[string]interface{} in Helm 3.x and fail for top-level JSON arrays.
 
-  Inside the outer range:
+  Inside the range:
     .          = current application item  { name, project, cluster, sources }
-    .sources   = []interface{} — range-able without any further parsing
+    .sources   = []interface{} — raw ArgoCD sources array, passed verbatim
     $.Values   = chart-level values  { partitionNumber, controlPlane, applications }
 
-  Multi-source support: spec.sources (plural) is used unconditionally.
-  ArgoCD 2.6+ supports multi-source Applications; a single-source app is
-  expressed as a one-element sources list.
+  Sources passthrough:
+    .sources | toJson emits the array as a YAML flow sequence (valid YAML 1.1).
+    Any ArgoCD source shape is supported — Helm, Kustomize, Directory, Plugin,
+    ref, multi-source — without any schema changes on the platform side.
 */ -}}
 {{- range fromJsonArray .Values.applications }}
 ---
@@ -31,23 +30,10 @@ metadata:
     - resources-finalizer.argocd.argoproj.io
 spec:
   project: {{ .project }}
-
-  sources:
-    {{- range .sources }}
-    - repoURL: {{ .repoUrl }}
-      targetRevision: {{ .revision }}
-      {{- if .path }}
-      path: {{ .path }}
-      {{- end }}
-      {{- if .chart }}
-      chart: {{ .chart }}
-      {{- end }}
-    {{- end }}
-
+  sources: {{ .sources | toJson }}
   destination:
     name: {{ .cluster }}
     namespace: argocd
-
   syncPolicy:
     automated:
       prune: true

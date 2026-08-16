@@ -50,8 +50,7 @@ public class GlobalExceptionHandler {
      * Handles all bean-validation failures originating from {@code @Valid @RequestBody}.
      *
      * <p>Both field-level errors (e.g. {@code @NotBlank name}) and object/class-level
-     * errors (e.g. {@code @ValidClusterAuth} on the cascaded {@code auth} object) are
-     * collected and returned in the {@code errors} array.
+     * errors are collected and returned in the {@code errors} array.
      */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidationErrors(
@@ -60,8 +59,7 @@ public class GlobalExceptionHandler {
 
         BindingResult result = ex.getBindingResult();
 
-        // Field-level constraint violations (e.g. @NotBlank, @ValidNamespacePatterns,
-        // @ValidK8sLabels, and cascaded @ValidClusterAuth that map to the "auth" field)
+        // Field-level constraint violations (e.g. @NotBlank, @ValidNamespacePatterns, @ValidK8sLabels)
         List<ErrorResponse.FieldError> fieldErrors = result.getFieldErrors().stream()
                 .map(fe -> ErrorResponse.FieldError.builder()
                         .field(fe.getField())

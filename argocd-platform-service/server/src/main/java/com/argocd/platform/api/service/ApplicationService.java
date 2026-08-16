@@ -6,13 +6,11 @@ import com.argocd.platform.api.exception.ResourceNotFoundException;
 import com.argocd.platform.api.model.request.ApplicationRequest;
 import com.argocd.platform.api.model.response.ApplicationResponse;
 import com.argocd.platform.api.repository.ApplicationRepository;
-import com.argocd.platform.api.repository.ApplicationSourceRepository;
 import com.argocd.platform.api.repository.ClusterRepository;
 import com.argocd.platform.api.repository.PartitionRepository;
 import com.argocd.platform.api.repository.ProjectRepository;
 import com.argocd.platform.api.util.PartitionType;
 import com.argocd.platform.api.util.ResourceStatus;
-import com.argocd.platform.db.jooq.tables.pojos.ApplicationSourcesEntity;
 import com.argocd.platform.db.jooq.tables.pojos.ApplicationsEntity;
 import lombok.RequiredArgsConstructor;
 import org.apache.commons.lang3.StringUtils;
@@ -20,15 +18,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 public class ApplicationService {
 
     private final ApplicationRepository applicationRepository;
-    private final ApplicationSourceRepository applicationSourceRepository;
     private final ProjectRepository projectRepository;
     private final ClusterRepository clusterRepository;
     private final PartitionRepository partitionRepository;
@@ -53,11 +50,7 @@ public class ApplicationService {
                 .setStatus(ResourceStatus.UNKNOWN.name())
                 .setGeneration(0L);
 
-        ApplicationsEntity saved = applicationRepository.save(entity);
-
-        // Persist sources linked to the newly created application id
-        applicationSourceRepository.saveAll(buildSourceEntities(saved.getId(), request));
-
+        ApplicationsEntity saved = applicationRepository.save(entity, request.getSources());
         return toResponse(saved);
     }
 
@@ -77,21 +70,17 @@ public class ApplicationService {
                 .setClusterId(clusterId)
                 .setGeneration(existing.getGeneration() + 1L);
 
-        ApplicationsEntity updated = applicationRepository.update(id, existing);
-
-        // Replace sources: delete old, insert new
-        applicationSourceRepository.deleteByApplicationId(id);
-        applicationSourceRepository.saveAll(buildSourceEntities(id, request));
-
+        ApplicationsEntity updated = applicationRepository.update(id, existing, request.getSources());
         return toResponse(updated);
     }
+
+    // -------------------------------------------------------------------------
+    // Validation helpers
+    // -------------------------------------------------------------------------
 
     /**
      * Validates that the given cluster is associated with the given project via
      * {@code project_clusters}. Throws {@link InvalidRequestException} if not.
-     *
-     * <p>This ensures an application can only target clusters that the project
-     * has explicit access to, preventing cross-project cluster usage.
      */
     private void validateClusterInProject(UUID projectId, UUID clusterId) {
         if (!projectRepository.isClusterInProject(projectId, clusterId)) {
@@ -141,19 +130,6 @@ public class ApplicationService {
                     .getId();
         }
         throw new InvalidRequestException("Either clusterId or clusterName must be provided");
-    }
-
-    private List<ApplicationSourcesEntity> buildSourceEntities(UUID applicationId, ApplicationRequest request) {
-        return request.getSources().stream()
-                .map(src -> new ApplicationSourcesEntity()
-                        .setApplicationId(applicationId)
-                        .setRepoUrl(src.getRepoUrl())
-                        .setRevision(src.getRevision())
-                        .setPath(src.getPath())
-                        .setChart(src.getChart())
-                        .setValues(src.getValues())
-                        .setSourceOrder(src.getSourceOrder()))
-                .collect(Collectors.toList());
     }
 
     private ApplicationResponse toResponse(ApplicationsEntity e) {

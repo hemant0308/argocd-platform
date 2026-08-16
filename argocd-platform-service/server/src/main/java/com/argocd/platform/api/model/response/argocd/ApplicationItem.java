@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.util.List;
+import java.util.Map;
 
 @Data
 @Builder
@@ -16,5 +17,6 @@ public class ApplicationItem {
     private String project;
     private String cluster;
     private String controlPlane;
-    private List<ApplicationSourceItem> sources;
+    /** Free-form ArgoCD source objects — stored and returned verbatim. */
+    private List<Map<String, Object>> sources;
 }
