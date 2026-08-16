@@ -1,0 +1,14 @@
+# Partition number — injected from the inner project-partition ApplicationSet.
+partitionNumber: ""
+
+# Name of the control plane this Application is deployed to (e.g. "cp-1").
+# Used as a label on each AppProject for filtering and auditing.
+controlPlane: ""
+
+# JSON array of projects to create:
+#   '[{"name":"my-project"}, ...]'
+#
+# Serialised by ArgoCD goTemplate ({{ .projects | toJson }}) from the native
+# array returned by the project-groups plugin.  Default is an empty JSON array
+# so that 'helm template' works without a -f values file.
+projects: "[]"

@@ -29,8 +29,9 @@ import java.util.stream.Collectors;
  *       requires {@code partitionNumber}</li>
  *   <li>{@code project-partitions} — all project partitions with control planes list
  *       (no extra params)</li>
- *   <li>{@code projects} — flat project list for a partition; requires
- *       {@code partitionNumber}</li>
+ *   <li>{@code project-groups} — projects in a partition fanned out per control plane;
+ *       requires {@code partitionNumber}. Every CP receives the full project list
+ *       because AppProjects must exist on all control planes.</li>
  * </ul>
  *
  * <p>Parameter map values are native JSON types (string, integer, array, object) —
@@ -58,10 +59,10 @@ public class ArgoCDPluginService {
             case "cluster-partitions" -> clusterPartitions();
             case "cluster-groups"     -> clusterGroups(params);
             case "project-partitions" -> projectPartitions();
-            case "projects"           -> projects(params);
+            case "project-groups"     -> projectGroups(params);
             default -> throw new InvalidRequestException(
                     "Unknown resource: '" + resource + "'. Supported values: " +
-                    "cluster-partitions, cluster-groups, project-partitions, projects");
+                    "cluster-partitions, cluster-groups, project-partitions, project-groups");
         };
 
         return PluginGeneratorResponse.builder()
@@ -154,14 +155,15 @@ public class ArgoCDPluginService {
     }
 
     // -------------------------------------------------------------------------
-    // resource: projects
-    // Returns ONE entry for the given partition containing all project names.
-    // The per-CP ApplicationSet uses this single entry to create one
-    // Application per partition on its CP. That Application deploys
-    // charts/appproject which loops over the list to create AppProject resources.
+    // resource: project-groups
+    // Returns one entry per control plane, each carrying the full project list
+    // for the given partition. Unlike clusters (assigned to a specific CP),
+    // AppProjects must exist on every control plane — so every CP entry receives
+    // the complete project list. One entry per CP generates one
+    // project-partition-NNN-CP Application that deploys AppProjects to that CP.
     // -------------------------------------------------------------------------
 
-    private List<Map<String, Object>> projects(Map<String, String> params) {
+    private List<Map<String, Object>> projectGroups(Map<String, String> params) {
         int partitionNumber = getRequiredInt(params, "partitionNumber");
         UUID partitionId = partitionRepository.findProjectPartitionIdByNumber(partitionNumber)
                 .orElseThrow(() -> new InvalidRequestException(
@@ -172,10 +174,19 @@ public class ArgoCDPluginService {
                 .map(p -> Map.of("name", p.getName()))
                 .collect(Collectors.toList());
 
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("partitionNumber", partitionNumber);
-        m.put("projects", minimalProjects);
-        return List.of(m);
+        List<String> cpNames = controlPlaneRepository.findAll().stream()
+                .map(cp -> cp.getName())
+                .collect(Collectors.toList());
+
+        return cpNames.stream()
+                .map(cpName -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("partitionNumber", partitionNumber);
+                    m.put("controlPlane", cpName);
+                    m.put("projects", minimalProjects);
+                    return m;
+                })
+                .collect(Collectors.toList());
     }
 
     // -------------------------------------------------------------------------

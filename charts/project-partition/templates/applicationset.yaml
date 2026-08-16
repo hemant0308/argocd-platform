@@ -1,0 +1,66 @@
+{{- /*
+  Two-layer template escaping
+  ───────────────────────────
+  Helm processes this file first.  To pass ArgoCD goTemplate tokens through
+  unchanged, wrap them in Helm string literals:
+
+    {{ "{{ .controlPlane }}" }}   →  Helm emits  →  {{ .controlPlane }}
+
+  ArgoCD then evaluates the literal using goTemplate (spec.goTemplate: true).
+
+  goTemplate is required because the projects field is a native JSON array
+  from the plugin.  With goTemplate, {{ .projects | toJson }} serialises it
+  to a proper JSON string that Helm receives as .Values.projects.
+  The downstream chart (appproject) parses it back with
+  fromJsonArray (Helm built-in that correctly handles JSON arrays, unlike
+  fromJson / fromYaml which both unmarshal into map[string]interface{}).
+*/ -}}
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: project-partition-{{ .Values.partitionNumber }}-groups-appset
+  namespace: argocd
+  annotations:
+    argocd-platform/partition-number: "{{ .Values.partitionNumber }}"
+    argocd-platform/generation: "{{ .Values.generation }}"
+
+spec:
+  goTemplate: true
+
+  generators:
+    - plugin:
+        requeueAfterSeconds: 1
+        configMapRef:
+          name: argocd-platform-plugin
+        input:
+          parameters:
+            resource: "project-groups"
+            partitionNumber: "{{ .Values.partitionNumber }}"
+
+  template:
+    metadata:
+      name: 'project-partition-{{ .Values.partitionNumber }}-{{ "{{ .controlPlane }}" }}'
+
+    spec:
+      project: default
+
+      source:
+        repoURL: {{ .Values.repoURL }}
+        targetRevision: {{ .Values.targetRevision }}
+        path: charts/appproject
+        helm:
+          valuesObject:
+            partitionNumber: {{ .Values.partitionNumber }}
+            controlPlane: '{{ "{{ .controlPlane }}" }}'
+            projects: '{{ "{{ .projects | toJson }}" }}'
+
+      destination:
+        name: '{{ "{{ .controlPlane }}" }}'
+        namespace: argocd
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

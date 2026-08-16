@@ -1,0 +1,37 @@
+{{- /*
+  Creates one ArgoCD AppProject per entry in .Values.projects.
+
+  .Values.projects is a JSON array string serialised by the inner
+  project-partition ApplicationSet via {{ .projects | toJson }}.
+
+  fromJsonArray (Helm built-in) correctly parses JSON arrays into a Go slice.
+  Use this instead of fromJson or fromYaml — both unmarshal into
+  map[string]interface{} in Helm 3.x and fail for top-level JSON arrays.
+
+  Inside the range:
+    .        = current project item  { name }
+    $.Values = chart-level values    { partitionNumber, controlPlane, projects }
+*/ -}}
+{{- range fromJsonArray .Values.projects }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: {{ .name }}
+  namespace: argocd
+  labels:
+    argocd-platform/partition: "{{ $.Values.partitionNumber }}"
+    argocd-platform/control-plane: "{{ $.Values.controlPlane }}"
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: "Managed by argocd-platform — partition {{ $.Values.partitionNumber }}"
+  sourceRepos:
+    - '*'
+  destinations:
+    - namespace: '*'
+      server: '*'
+  clusterResourceWhitelist:
+    - group: '*'
+      kind: '*'
+{{- end }}

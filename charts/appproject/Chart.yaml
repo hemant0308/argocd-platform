@@ -1,0 +1,9 @@
+apiVersion: v2
+name: appproject
+description: >
+  Creates ArgoCD AppProject resources on a target control plane.
+  One AppProject is created per project entry in the projects list.
+  Deployed to every control plane by an Application generated from
+  charts/project-partition.
+type: application
+version: 1.0.0
