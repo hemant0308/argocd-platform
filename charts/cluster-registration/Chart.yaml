@@ -1,0 +1,9 @@
+apiVersion: v2
+name: cluster-registration
+description: >
+  Registers clusters on a target control plane by creating ArgoCD Cluster
+  Secrets in the argocd namespace. One Secret is created per cluster entry
+  in the clusters list. Deployed to the target control plane cluster by an
+  Application generated from charts/cluster-partition.
+type: application
+version: 1.0.0

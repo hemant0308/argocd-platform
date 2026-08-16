@@ -105,7 +105,8 @@ public class ArgoCDPluginService {
 
         List<ClusterItem> clusters = clusterRepository.findByPartitionId(partitionId);
 
-        // Group by controlPlane (preserve insertion order); skip unassigned clusters
+        // Group by controlPlane (preserve insertion order); skip unassigned clusters.
+        // One entry per CP — the Helm chart uses fromJsonArray to range over clusters.
         Map<String, List<ClusterItem>> byCp = clusters.stream()
                 .filter(c -> c.getControlPlane() != null)
                 .collect(Collectors.groupingBy(
@@ -115,7 +116,6 @@ public class ArgoCDPluginService {
 
         return byCp.entrySet().stream()
                 .map(entry -> {
-                    // Only include fields the Helm chart needs for cluster Secrets
                     List<Map<String, String>> minimalClusters = entry.getValue().stream()
                             .map(c -> Map.of("name", c.getName(), "server", c.getServer()))
                             .collect(Collectors.toList());

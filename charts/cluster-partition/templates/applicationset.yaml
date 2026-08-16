@@ -1,18 +1,19 @@
 {{- /*
   Two-layer template escaping
   ───────────────────────────
-  Helm processes this file first (Go text/template). To pass ArgoCD goTemplate
-  tokens through to ArgoCD unchanged we wrap them in Helm string literals:
+  Helm processes this file first.  To pass ArgoCD goTemplate tokens through
+  unchanged, wrap them in Helm string literals:
 
-    {{ "{{ .someVar }}" }}  →  Helm emits  →  {{ .someVar }}
+    {{ "{{ .controlPlane }}" }}   →  Helm emits  →  {{ .controlPlane }}
 
-  ArgoCD (goTemplate: true) then substitutes the literal token at reconcile
-  time.  goTemplate mode uses dot-prefixed syntax (.fieldName), NOT the
-  fasttemplate syntax used by the outer cluster-partitions ApplicationSet.
+  ArgoCD then evaluates the literal using goTemplate (spec.goTemplate: true).
 
-  NOTE: Never put raw Helm/Go template tokens inside YAML # comments — Helm
-  processes them before YAML parsing, so an unclosed action causes parse
-  errors.
+  goTemplate is required because the clusters field is a native JSON array
+  from the plugin.  With goTemplate, {{ .clusters | toJson }} serialises it
+  to a proper JSON string that Helm receives as .Values.clusters.
+  The downstream chart (cluster-registration) parses it back with
+  fromJsonArray (Helm built-in that correctly handles JSON arrays, unlike
+  fromJson / fromYaml which both unmarshal into map[string]interface{}).
 */ -}}
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
@@ -24,9 +25,6 @@ metadata:
     argocd-platform/generation: "{{ .Values.generation }}"
 
 spec:
-  # goTemplate: true is required because the cluster-groups plugin returns
-  # the clusters field as a native JSON array. The default fasttemplate mode
-  # serialises non-string values using Go fmt.Stringer, not JSON.
   goTemplate: true
 
   generators:
@@ -36,12 +34,10 @@ spec:
         input:
           parameters:
             resource: "cluster-groups"
-            # Spring Boot getRequiredInt() parses this with Integer.parseInt.
             partitionNumber: "{{ .Values.partitionNumber }}"
 
   template:
     metadata:
-      # Helm inlines partitionNumber; ArgoCD goTemplate substitutes controlPlane.
       name: 'cluster-partition-{{ .Values.partitionNumber }}-{{ "{{ .controlPlane }}" }}'
 
     spec:
@@ -54,19 +50,9 @@ spec:
         helm:
           valuesObject:
             partitionNumber: {{ .Values.partitionNumber }}
-
-            # ArgoCD goTemplate substitutes the controlPlane name (e.g. "cp-1").
             controlPlane: '{{ "{{ .controlPlane }}" }}'
-
-            # clusters is a native JSON array from the plugin. We serialise it
-            # to a JSON string so the ApplicationSet YAML stored in Kubernetes
-            # stays valid (an unquoted inline array after substitution could
-            # violate YAML). charts/cluster-registration iterates with:
-            #   range (fromJson .Values.clusters)
             clusters: '{{ "{{ .clusters | toJson }}" }}'
 
-      # Target the control plane by its ArgoCD cluster secret name.
-      # The secret name matches the name label on argocd/managed/clusters/cp-*.yaml.
       destination:
         name: '{{ "{{ .controlPlane }}" }}'
         namespace: argocd

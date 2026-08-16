@@ -1,0 +1,14 @@
+# Partition number — injected from the inner cluster-partition ApplicationSet.
+partitionNumber: ""
+
+# Name of the control plane this Application is deployed to (e.g. "cp-1").
+# Used as a label on each Cluster Secret for filtering and auditing.
+controlPlane: ""
+
+# JSON array of clusters to register:
+#   '[{"name":"cluster-1","server":"https://cluster-1:6443"}, ...]'
+#
+# Serialised by ArgoCD goTemplate ({{ .clusters | toJson }}) from the native
+# array returned by the cluster-groups plugin.  Default is an empty JSON array
+# so that 'helm template' works without a -f values file.
+clusters: "[]"
