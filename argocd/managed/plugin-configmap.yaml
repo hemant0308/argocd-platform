@@ -5,7 +5,7 @@ metadata:
   namespace: argocd
 data:
   # ArgoCD ApplicationSet Plugin Generator protocol:
-  # ArgoCD will POST to {baseUrl}/api/v1/getparams.execute
+  # ArgoCD POSTs to {baseUrl}/api/v1/getparams.execute on every reconcile.
   # The path suffix is fixed by the protocol — do not append it here.
   #
   # Set input.parameters.resource in each ApplicationSet generator block
@@ -14,4 +14,8 @@ data:
   #   cluster-groups      — clusters in a partition grouped by control plane (requires partitionNumber)
   #   project-partitions  — list all project partitions with control planes
   #   projects            — projects in a partition (requires partitionNumber)
-  baseUrl: "http://argocd-platform-service.argocd.svc.cluster.local:8080"
+  baseUrl: "http://host.docker.internal:8080"
+  # ArgoCD sends this value as "Authorization: Bearer <token>" on every plugin call.
+  # The plugin service does not validate it (internal cluster traffic only).
+  # Use the $secret-name:key syntax to pull the value from a Kubernetes Secret.
+  token: "$argocd-platform-plugin-secret:token"
