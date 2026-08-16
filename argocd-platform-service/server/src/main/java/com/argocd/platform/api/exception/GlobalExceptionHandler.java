@@ -225,6 +225,22 @@ public class GlobalExceptionHandler {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
         }
 
+        boolean isFkViolation = rootMsg != null
+                && (rootMsg.contains("violates foreign key constraint")
+                        || rootMsg.contains("is still referenced from table"));
+
+        if (isFkViolation) {
+            log.debug("FK constraint violation on {} {}: {}", request.getMethod(), request.getRequestURI(), rootMsg);
+            ErrorResponse body = ErrorResponse.builder()
+                    .timestamp(LocalDateTime.now())
+                    .status(HttpStatus.CONFLICT.value())
+                    .error(HttpStatus.CONFLICT.getReasonPhrase())
+                    .message("Cannot delete resource: it is still referenced by other resources.")
+                    .path(request.getRequestURI())
+                    .build();
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+        }
+
         log.error("Data integrity violation on {} {}", request.getMethod(), request.getRequestURI(), ex);
         ErrorResponse body = ErrorResponse.builder()
                 .timestamp(LocalDateTime.now())

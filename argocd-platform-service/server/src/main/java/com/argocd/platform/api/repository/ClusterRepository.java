@@ -87,6 +87,29 @@ public class ClusterRepository {
     }
 
     /**
+     * Returns all clusters ordered by name.
+     * Used by the management UI list endpoint.
+     */
+    public List<ClustersEntity> findAll() {
+        return dsl.selectFrom(CLUSTERS)
+                .orderBy(CLUSTERS.NAME)
+                .fetchInto(ClustersEntity.class);
+    }
+
+    /**
+     * Deletes the cluster with the given id.
+     * Callers must verify existence before calling this method.
+     * FK violations (cluster referenced by applications) propagate as
+     * {@link org.springframework.dao.DataIntegrityViolationException} and are mapped to 409
+     * by {@link com.argocd.platform.api.exception.GlobalExceptionHandler}.
+     */
+    public void deleteById(UUID id) {
+        dsl.deleteFrom(CLUSTERS)
+                .where(CLUSTERS.ID.eq(id))
+                .execute();
+    }
+
+    /**
      * Returns all clusters in the given partition ordered by name, enriched with their
      * control-plane name. The auth JSONB is deserialised as-is into {@code config}
      * and passed verbatim to the cluster-registration Helm chart.

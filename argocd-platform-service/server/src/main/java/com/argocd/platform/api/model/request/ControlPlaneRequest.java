@@ -15,9 +15,9 @@ public class ControlPlaneRequest {
     @NotBlank(message = "Control plane name is required")
     private String name;
 
-    @NotBlank(message = "Server endpoint is required")
+    @NotBlank(message = "Server URL is required")
     private String server;
 
-    /** Optional scheduling capacity hint. Null means unlimited. */
-    private Integer capacity;
+    /** ArgoCD web-UI base URL (e.g. https://argocd.example.com). Used for navigation links. */
+    private String endpoint;
 }

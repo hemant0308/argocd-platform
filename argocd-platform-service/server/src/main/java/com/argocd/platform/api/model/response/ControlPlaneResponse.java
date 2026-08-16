@@ -18,7 +18,8 @@ public class ControlPlaneResponse {
     private String name;
     private String server;
     private String status;
-    private Integer capacity;
+    /** ArgoCD web-UI base URL — used for navigation links in the management UI. */
+    private String endpoint;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

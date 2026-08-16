@@ -116,6 +116,33 @@ public class ClusterService {
         return toResponse(updated, fetchControlPlaneName(controlPlaneId));
     }
 
+    /**
+     * Returns all clusters ordered by name, each enriched with its control-plane name.
+     */
+    public List<ClusterResponse> list() {
+        List<ClustersEntity> clusters = clusterRepository.findAll();
+        Map<UUID, String> cpNames = controlPlaneRepository.findAll().stream()
+                .collect(Collectors.toMap(
+                        ControlPlanesEntity::getId,
+                        ControlPlanesEntity::getName,
+                        (a, b) -> a));
+        return clusters.stream()
+                .map(c -> toResponse(c, cpNames.get(c.getControlPlaneId())))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Deletes a cluster by id.
+     * If the cluster is still referenced by applications a 409 is returned
+     * (FK violation caught by {@link com.argocd.platform.api.exception.GlobalExceptionHandler}).
+     */
+    @Transactional
+    public void delete(UUID id) {
+        clusterRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Cluster not found: " + id));
+        clusterRepository.deleteById(id);
+    }
+
     // -------------------------------------------------------------------------
     // Control plane resolution
     // -------------------------------------------------------------------------

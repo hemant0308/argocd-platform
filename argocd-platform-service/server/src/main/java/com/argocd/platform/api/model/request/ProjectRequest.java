@@ -1,8 +1,6 @@
 package com.argocd.platform.api.model.request;
 
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -17,6 +15,9 @@ import java.util.UUID;
  * <p>Cluster associations: each entry in {@code clusters} is resolved by id first,
  * then by name. Records are inserted into {@code project_clusters}.
  * On update, existing cluster associations are replaced.
+ *
+ * <p>{@code name} and {@code createdBy} are only required on create; the service
+ * validates this manually so that the same DTO can be reused for updates.
  */
 @Data
 @Builder
@@ -24,12 +25,16 @@ import java.util.UUID;
 @AllArgsConstructor
 public class ProjectRequest {
 
-    @NotBlank(message = "Project name is required")
+    /** Required on create; ignored on update (name is immutable). */
     private String name;
 
     private String description;
 
-    @NotNull(message = "createdBy user ID is required")
+    /**
+     * ID of the user creating the project.
+     * Defaults to {@link com.argocd.platform.api.service.ProjectService#DEFAULT_CREATED_BY}
+     * when not supplied.
+     */
     private UUID createdBy;
 
     /**

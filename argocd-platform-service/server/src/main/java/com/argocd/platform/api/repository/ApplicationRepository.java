@@ -73,6 +73,42 @@ public class ApplicationRepository {
                 .fetchOptionalInto(ApplicationsEntity.class);
     }
 
+    /**
+     * Returns all applications ordered by name.
+     * Used by the management UI list endpoint.
+     * NOTE: does not include the {@code sources} JSONB — call {@link #findAllSourcesMap()} separately.
+     */
+    public List<ApplicationsEntity> findAll() {
+        return dsl.selectFrom(APPLICATIONS)
+                .orderBy(APPLICATIONS.NAME)
+                .fetchInto(ApplicationsEntity.class);
+    }
+
+    /**
+     * Returns a map of application id → raw sources JSONB for all applications.
+     * Used together with {@link #findAll()} to avoid an N+1 query when building responses.
+     */
+    public Map<UUID, JSONB> findAllSourcesMap() {
+        return dsl.select(APPLICATIONS.ID, SOURCES)
+                .from(APPLICATIONS)
+                .fetch()
+                .stream()
+                .filter(r -> r.get(SOURCES) != null)
+                .collect(java.util.stream.Collectors.toMap(
+                        r -> r.get(APPLICATIONS.ID),
+                        r -> r.get(SOURCES)));
+    }
+
+    /**
+     * Deletes an application by id.
+     * Callers must verify existence before calling this method.
+     */
+    public void deleteById(UUID id) {
+        dsl.deleteFrom(APPLICATIONS)
+                .where(APPLICATIONS.ID.eq(id))
+                .execute();
+    }
+
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------

@@ -119,6 +119,58 @@ public class ProjectRepository {
     }
 
     /**
+     * Returns all projects ordered by name.
+     * Used by the management UI list endpoint.
+     */
+    public List<ProjectsEntity> findAll() {
+        return dsl.selectFrom(PROJECTS)
+                .orderBy(PROJECTS.NAME)
+                .fetchInto(ProjectsEntity.class);
+    }
+
+    /**
+     * Returns the cluster associations for a set of project IDs in a single JOIN query.
+     * Result: projectId → list of {@link ProjectClusterItem} (name + namespaces).
+     * Projects with no clusters are absent from the map (callers should use {@code getOrDefault}).
+     */
+    public Map<UUID, List<ProjectClusterItem>> findClustersForProjects(List<UUID> projectIds) {
+        if (projectIds == null || projectIds.isEmpty()) {
+            return Map.of();
+        }
+        record ClusterRow(UUID projectId, String clusterName, JSONB namespaces) {}
+
+        return dsl.select(PROJECT_CLUSTERS.PROJECT_ID, CLUSTERS.NAME, CLUSTERS.NAMESPACES)
+                .from(PROJECT_CLUSTERS)
+                .join(CLUSTERS).on(CLUSTERS.ID.eq(PROJECT_CLUSTERS.CLUSTER_ID))
+                .where(PROJECT_CLUSTERS.PROJECT_ID.in(projectIds))
+                .fetch(r -> new ClusterRow(
+                        r.get(PROJECT_CLUSTERS.PROJECT_ID),
+                        r.get(CLUSTERS.NAME),
+                        r.get(CLUSTERS.NAMESPACES)))
+                .stream()
+                .collect(Collectors.groupingBy(
+                        ClusterRow::projectId,
+                        Collectors.mapping(
+                                row -> ProjectClusterItem.builder()
+                                        .name(row.clusterName())
+                                        .namespaces(parseNamespaces(row.namespaces()))
+                                        .build(),
+                                Collectors.toList())));
+    }
+
+    /**
+     * Deletes a project by id.
+     * The DB CASCADE drops associated {@code project_clusters} rows automatically.
+     * Associated {@code applications} rows are also CASCADE-deleted — the caller should
+     * warn the user before invoking this.
+     */
+    public void deleteById(UUID id) {
+        dsl.deleteFrom(PROJECTS)
+                .where(PROJECTS.ID.eq(id))
+                .execute();
+    }
+
+    /**
      * Returns all projects in the given partition ordered by name, each carrying
      * the list of clusters assigned to it (via {@code project_clusters}).
      *

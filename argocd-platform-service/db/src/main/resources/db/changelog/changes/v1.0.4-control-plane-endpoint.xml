@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
+
+    <!-- =========================================================
+         Drop the scheduling-capacity hint from control_planes.
+         Capacity-based assignment is superseded by the endpoint
+         field which carries the ArgoCD web-UI URL used for
+         navigation links and ArgoCD API calls.
+         ========================================================= -->
+    <changeSet id="v1.0.4-drop-control-plane-capacity" author="argocd-platform">
+        <dropColumn tableName="control_planes" columnName="capacity"/>
+        <rollback>
+            <addColumn tableName="control_planes">
+                <column name="capacity" type="INTEGER"/>
+            </addColumn>
+        </rollback>
+    </changeSet>
+
+    <!-- =========================================================
+         Add endpoint column to control_planes.
+         Stores the ArgoCD web-UI / API base URL for this control
+         plane instance (e.g. https://argocd.example.com).
+         Used to construct navigation links to ArgoCD resources
+         (applications, cluster settings, etc.).
+         NULL is allowed for backwards compatibility with existing
+         rows written before this migration.
+         ========================================================= -->
+    <changeSet id="v1.0.4-add-control-plane-endpoint" author="argocd-platform">
+        <addColumn tableName="control_planes">
+            <column name="endpoint" type="VARCHAR(500)">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="control_planes" columnName="endpoint"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -7,6 +7,7 @@ import com.argocd.platform.api.exception.ResourceNotFoundException;
 import com.argocd.platform.api.model.request.ClusterReference;
 import com.argocd.platform.api.model.request.ProjectRequest;
 import com.argocd.platform.api.model.response.ProjectResponse;
+import com.argocd.platform.api.model.response.argocd.ProjectClusterItem;
 import com.argocd.platform.api.repository.ClusterRepository;
 import com.argocd.platform.api.repository.PartitionRepository;
 import com.argocd.platform.api.repository.ProjectRepository;
@@ -21,11 +22,17 @@ import org.springframework.util.CollectionUtils;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 public class ProjectService {
+
+    /** Default user ID applied to {@code created_by} when not supplied in the request. */
+    public static final UUID DEFAULT_CREATED_BY =
+            UUID.fromString("76012b17-c3f5-4956-95a5-d9b3fe14f838");
 
     private final ProjectRepository projectRepository;
     private final ClusterRepository clusterRepository;
@@ -34,6 +41,10 @@ public class ProjectService {
 
     @Transactional
     public ProjectResponse create(ProjectRequest request) {
+        if (StringUtils.isBlank(request.getName())) {
+            throw new InvalidRequestException("Project name is required");
+        }
+
         // Reject duplicates before hitting the DB unique constraint
         if (projectRepository.findByName(request.getName()).isPresent()) {
             throw new ResourceAlreadyExistsException(
@@ -47,10 +58,13 @@ public class ProjectService {
         UUID partitionId = partitionRepository.resolvePartitionId(
                 PartitionType.PROJECT, partitionProperties.getProjectTargetSize());
 
+        UUID createdBy = request.getCreatedBy() != null
+                ? request.getCreatedBy() : DEFAULT_CREATED_BY;
+
         ProjectsEntity entity = new ProjectsEntity()
                 .setName(request.getName())
                 .setDescription(request.getDescription())
-                .setCreatedBy(request.getCreatedBy())
+                .setCreatedBy(createdBy)
                 .setProjectPartitionId(partitionId)
                 .setStatus(ResourceStatus.UNKNOWN.name());
 
@@ -61,7 +75,10 @@ public class ProjectService {
             projectRepository.saveProjectClusters(saved.getId(), clusterIds);
         }
 
-        return toResponse(saved);
+        List<ProjectClusterItem> clusters = projectRepository
+                .findClustersForProjects(List.of(saved.getId()))
+                .getOrDefault(saved.getId(), List.of());
+        return toResponse(saved, clusters);
     }
 
     @Transactional
@@ -84,7 +101,10 @@ public class ProjectService {
             projectRepository.saveProjectClusters(id, clusterIds);
         }
 
-        return toResponse(updated);
+        List<ProjectClusterItem> clusters = projectRepository
+                .findClustersForProjects(List.of(id))
+                .getOrDefault(id, List.of());
+        return toResponse(updated, clusters);
     }
 
     /**
@@ -118,13 +138,39 @@ public class ProjectService {
         return resolved;
     }
 
-    private ProjectResponse toResponse(ProjectsEntity e) {
+    /**
+     * Returns all projects ordered by name, each carrying its assigned clusters.
+     * Uses two queries to avoid N+1.
+     */
+    public List<ProjectResponse> list() {
+        List<ProjectsEntity> all = projectRepository.findAll();
+        if (all.isEmpty()) return List.of();
+        List<UUID> ids = all.stream().map(ProjectsEntity::getId).collect(Collectors.toList());
+        Map<UUID, List<ProjectClusterItem>> clusterMap = projectRepository.findClustersForProjects(ids);
+        return all.stream()
+                .map(p -> toResponse(p, clusterMap.getOrDefault(p.getId(), List.of())))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Deletes a project by id.
+     * WARNING: all associated applications are also deleted via DB CASCADE.
+     */
+    @Transactional
+    public void delete(UUID id) {
+        projectRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Project not found: " + id));
+        projectRepository.deleteById(id);
+    }
+
+    private ProjectResponse toResponse(ProjectsEntity e, List<ProjectClusterItem> clusters) {
         return ProjectResponse.builder()
                 .id(e.getId())
                 .name(e.getName())
                 .description(e.getDescription())
                 .status(e.getStatus())
                 .createdBy(e.getCreatedBy())
+                .clusters(clusters)
                 .createdAt(e.getCreatedAt())
                 .updatedAt(e.getUpdatedAt())
                 .build();

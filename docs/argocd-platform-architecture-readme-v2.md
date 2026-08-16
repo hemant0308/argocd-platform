@@ -167,15 +167,20 @@ The Routing Service uses this relationship for the primary user authorization ch
 | Column | Purpose |
 |---|---|
 | `id` | Cluster ID |
-| `name` | Cluster name |
+| `name` | Cluster name (globally unique; immutable after creation) |
 | `server` | Kubernetes API endpoint/reference |
 | `status` | Lifecycle state |
 | `cluster_partition_id` | Assigned cluster partition |
 | `control_plane_id` | Current control-plane assignment |
+| `namespaces` | JSONB array of namespace names / glob patterns the cluster registration is scoped to. `null` means cluster-level (unrestricted) access — the ArgoCD default. Used to build `spec.destinations` on AppProjects. |
+| `labels` | JSONB key/value map for selector-based cluster routing |
+| `auth` | JSONB free-form authentication credentials for the Kubernetes API server (e.g. `{"bearerToken": "..."}` for bearer auth). `null` for in-cluster or externally managed credentials. Stored and returned verbatim — the platform does not validate or interpret its shape. |
 | `created_at` | Creation timestamp |
 | `updated_at` | Last update |
 
 `control_plane_id` is mutable so clusters can be moved between control planes during failover/rebalancing.
+
+> **Auth storage note:** The `auth` JSONB on `clusters` stores credentials for *user* Kubernetes clusters — i.e., the clusters that ArgoCD deploys user applications to. It is passed through to the ArgoCD cluster `Secret` via the `cluster-registration` Helm chart. Credentials for ArgoCD control planes themselves are not stored in the database; they remain in Kubernetes Secrets managed outside this service.
 
 ---
 
@@ -197,14 +202,20 @@ This represents which clusters are associated with which projects.
 | Column | Purpose |
 |---|---|
 | `id` | Stable application ID |
-| `name` | Application name |
+| `name` | Application name — see uniqueness note below |
 | `project_id` | Owning project |
 | `cluster_id` | Target user cluster |
 | `application_partition_id` | Stable application partition |
 | `status` | Lifecycle state |
-| `generation` | Desired-state generation |
+| `generation` | Desired-state generation counter; incremented on each desired-state update |
+| `sources` | JSONB array of ArgoCD source objects (`repoURL`, `revision`, `path`, `chart`, `helm`, etc.). Free-form — any shape ArgoCD accepts is valid without schema changes. |
 | `created_at` | Creation timestamp |
 | `updated_at` | Last update |
+
+> **Application name uniqueness:** The DB enforces a `(project_id, name)` unique constraint.
+> On creation the service appends a 5-character lowercase hex suffix to the caller-supplied base name
+> (e.g. `my-app` → `my-app-3f2a1`). This suffix is returned in the create response and becomes the
+> stable identity used in ArgoCD. The name cannot be changed after creation.
 
 > **Design decision:** `control_plane_id` is intentionally absent from the `applications` table.
 > The control plane is derived transitively via `application → cluster → control_plane`.
@@ -217,20 +228,14 @@ An application's partition does not change when its cluster is reassigned to a d
 
 ---
 
-## 4.7 `application_sources`
+## 4.7 `application_sources` — superseded
 
-| Column | Purpose |
-|---|---|
-| `id` | Source ID |
-| `application_id` | Application |
-| `repo_url` | Git repository |
-| `revision` | Branch/tag/commit |
-| `path` | Manifest path |
-| `chart` | Helm chart if applicable |
-| `values` | Helm values/configuration |
-| `source_order` | Multi-source ordering |
-
-Supports applications with multiple Git/Helm sources.
+> **Removed in migration v1.0.3.**
+> The `application_sources` table was dropped and replaced by the `sources` JSONB column on `applications` (§4.6).
+>
+> The motivation: a fixed relational schema for sources requires a schema migration for every new ArgoCD
+> source field. A JSONB array stores any source shape ArgoCD accepts, including multi-source configurations,
+> without schema changes. The application layer is responsible for passing the array through unchanged.
 
 ---
 
@@ -612,225 +617,183 @@ The APIs consumed by ArgoCD/ApplicationSet should return only the data needed fo
 
 The goal is to avoid returning all applications or all clusters in one response.
 
----
+## 13.0 Protocol — ArgoCD Plugin Generator
 
-## 13.1 Project partition discovery
-
-```http
-GET /internal/argocd/project-partitions
-```
-
-Purpose:
-
-Used by the top-level Project Partition ApplicationSet.
-
-Example response:
-
-```json
-[
-  {
-    "partition": "01",
-    "projectCount": 100,
-    "generation": 42
-  },
-  {
-    "partition": "02",
-    "projectCount": 83,
-    "generation": 31
-  }
-]
-```
-
-This response contains partition metadata, not all projects.
-
----
-
-## 13.2 Project partition data
+All ArgoCD-facing data APIs are exposed via the **ArgoCD ApplicationSet Plugin Generator** protocol, not as conventional REST endpoints.
 
 ```http
-GET /internal/argocd/project-partitions/{partition}
-```
+POST /api/v1/getparams.execute
+Content-Type: application/json
 
-Example:
-
-```http
-GET /internal/argocd/project-partitions/01
-```
-
-Example response:
-
-```json
 {
-  "partition": "01",
-  "generation": 42,
-  "projects": [
-    {
-      "id": "project-001",
-      "name": "payments"
-    },
-    {
-      "id": "project-002",
-      "name": "checkout"
+  "input": {
+    "parameters": {
+      "resource": "<resource-name>",
+      ...
     }
-  ]
+  }
 }
 ```
 
-The response contains only projects in that partition.
-
----
-
-## 13.3 Cluster partition discovery
-
-```http
-GET /internal/argocd/cluster-partitions
-```
-
-Example response:
-
-```json
-[
-  {
-    "partition": "01",
-    "clusterCount": 100,
-    "generation": 51
-  },
-  {
-    "partition": "02",
-    "clusterCount": 100,
-    "generation": 52
-  },
-  {
-    "partition": "03",
-    "clusterCount": 100,
-    "generation": 53
-  }
-]
-```
-
-For 1,000 clusters and a target size of 100, this gives approximately 10 cluster partitions.
-
----
-
-## 13.4 Cluster partition data
-
-```http
-GET /internal/argocd/cluster-partitions/{partition}
-```
-
-Example:
-
-```http
-GET /internal/argocd/cluster-partitions/01
-```
-
-Example response:
+The `resource` parameter selects the handler. The response is always:
 
 ```json
 {
-  "partition": "01",
+  "output": {
+    "parameters": [ { ... }, { ... } ]
+  }
+}
+```
+
+Each element in `parameters` becomes one parameter set that ApplicationSet uses to generate one Application.
+
+Supported `resource` values:
+
+| `resource` | Handler | Required extra params |
+|---|---|---|
+| `cluster-partitions` | All cluster partitions | — |
+| `cluster-groups` | Clusters in a partition, grouped by control plane | `partitionNumber` |
+| `project-partitions` | All project partitions (includes all CP names for fan-out) | — |
+| `project-groups` | Projects in a partition, fanned out per control plane | `partitionNumber` |
+| `application-partitions` | All application partitions | — |
+| `application-groups` | Applications in a partition, grouped by control plane | `partitionNumber` |
+
+---
+
+## 13.1 `cluster-partitions`
+
+Returns one element per cluster partition. ApplicationSet creates one `cluster-partition-NNN` Application per element.
+
+Example element:
+
+```json
+{
+  "partitionNumber": 1,
   "generation": 51,
+  "clusterCount": 100
+}
+```
+
+---
+
+## 13.2 `cluster-groups`
+
+Returns one element per control plane that has clusters in the given partition. Each element carries the full cluster list for that CP, including credentials (`config`) for ArgoCD cluster Secret generation.
+
+Example element:
+
+```json
+{
+  "partitionNumber": 1,
+  "controlPlane": "cp-1",
   "clusters": [
     {
       "name": "cluster-001",
-      "server": "https://cluster-001.example.internal"
-    },
-    {
-      "name": "cluster-002",
-      "server": "https://cluster-002.example.internal"
+      "server": "https://cluster-001.example.internal",
+      "config": { "bearerToken": "..." }
     }
   ]
 }
 ```
 
-Production cluster credentials should preferably be injected through an External Secrets/secret-store mechanism rather than returned as normal API data.
-
-Local development can use generated cluster Secret manifests as previously planned.
+`config` is the raw `auth` JSONB from the `clusters` table, passed through verbatim. Clusters without a control-plane assignment are excluded.
 
 ---
 
-## 13.5 Application partition discovery
+## 13.3 `project-partitions`
 
-```http
-GET /internal/argocd/application-partitions
-```
+Returns one element per project partition. Each element includes all control-plane names so that the downstream ApplicationSet can fan out one Application per control plane (AppProjects must exist on all control planes).
 
-Example response:
-
-```json
-[
-  {
-    "partition": "0001",
-    "applicationCount": 100,
-    "generation": 101
-  },
-  {
-    "partition": "0002",
-    "applicationCount": 100,
-    "generation": 102
-  },
-  {
-    "partition": "0003",
-    "applicationCount": 74,
-    "generation": 88
-  }
-]
-```
-
-This is intentionally independent of projects.
-
----
-
-## 13.6 Application partition data
-
-```http
-GET /internal/argocd/application-partitions/{partition}
-```
-
-Example:
-
-```http
-GET /internal/argocd/application-partitions/0001
-```
-
-Example response:
+Example element:
 
 ```json
 {
-  "partition": "0001",
+  "partitionNumber": 1,
+  "generation": 42,
+  "projectCount": 100,
+  "controlPlanes": ["cp-1", "cp-2", "cp-3"]
+}
+```
+
+---
+
+## 13.4 `project-groups`
+
+Returns one element per control plane for the given partition. Every CP receives the complete project list because AppProjects must exist on all control planes.
+
+Each project carries the list of clusters assigned to it (from `project_clusters`), including the namespace whitelist for each cluster. This data is used by the `project-registration` Helm chart to build `spec.destinations` on AppProjects.
+
+Example element:
+
+```json
+{
+  "partitionNumber": 1,
+  "controlPlane": "cp-1",
+  "projects": [
+    {
+      "name": "payments",
+      "clusters": [
+        { "name": "cluster-001", "namespaces": ["payments-prod", "payments-staging"] },
+        { "name": "cluster-002", "namespaces": [] }
+      ]
+    },
+    {
+      "name": "checkout",
+      "clusters": []
+    }
+  ]
+}
+```
+
+`namespaces: []` means the cluster is registered without a namespace restriction — the AppProject destination for that cluster uses `namespace: '*'`.
+`clusters: []` means the project has no assigned clusters — the AppProject falls back to a wildcard destination until clusters are added.
+
+---
+
+## 13.5 `application-partitions`
+
+Returns one element per application partition. ApplicationSet creates one `application-partition-NNN` Application per element.
+
+Example element:
+
+```json
+{
+  "partitionNumber": 1,
   "generation": 101,
+  "applicationCount": 100
+}
+```
+
+---
+
+## 13.6 `application-groups`
+
+Returns one element per control plane that has applications in the given partition. Each element carries the full application list for that CP.
+
+Example element:
+
+```json
+{
+  "partitionNumber": 1,
+  "controlPlane": "cp-1",
   "applications": [
     {
-      "name": "app-001",
-      "project": "project01",
+      "name": "my-app-3f2a1",
+      "project": "payments",
       "cluster": "cluster-001",
-      "controlPlane": "cp-1",
       "sources": [
         {
-          "repoURL": "https://github.com/company/app-001.git",
+          "repoURL": "https://github.com/company/my-app.git",
           "revision": "main",
           "path": "deploy"
         }
       ]
-    },
-    {
-      "name": "app-002",
-      "project": "project01",
-      "cluster": "cluster-007",
-      "controlPlane": "cp-2",
-      "sources": [
-        {
-          "repoURL": "https://github.com/company/app-002.git",
-          "revision": "v1.2.0",
-          "path": "k8s"
-        }
-      ]
     }
   ]
 }
 ```
 
-Only the applications in that partition are returned.
+`sources` is the raw JSONB array from the `applications` table — any ArgoCD-compatible source shape is valid. Applications without a control-plane assignment (i.e. their cluster has no `control_plane_id`) are excluded.
 
 ---
 
@@ -1455,6 +1418,19 @@ modify ArgoCD control-plane resources
 
 Prefer an allow-list of permitted workload resource types rather than an unrestricted policy with a growing deny list.
 
+## AppProject destinations — generated from database
+
+`spec.destinations` on AppProjects are **not** statically configured; they are generated at reconciliation time from the cluster assignments stored in `project_clusters`.
+
+The `project-groups` API response (§13.4) carries the cluster list for each project. The `project-registration` Helm chart translates this into `spec.destinations` entries:
+
+- Each assigned cluster contributes one or more destination entries.
+- If a cluster has a namespace whitelist (`namespaces` column), one entry is emitted per namespace.
+- If a cluster has no namespace restriction, a single entry with `namespace: '*'` is emitted.
+- If a project has no cluster assignments, a wildcard destination (`server: '*' / namespace: '*'`) is used as a safe placeholder until clusters are added.
+
+This means that adding or removing a cluster from a project in the database is sufficient to update the AppProject destinations — no manual Git edits are required.
+
 ---
 
 # 23. Managed ArgoCD identity
@@ -1832,3 +1808,37 @@ and use measurements to choose:
 - ApplicationSet controller capacity
 - Routing Service API capacity
 - PostgreSQL query/index strategy
+
+---
+
+# 31. API behavior rules
+
+## Unique names
+
+| Resource | Uniqueness scope | Enforcement |
+|---|---|---|
+| `clusters` | Global (`clusters.name` DB unique constraint) | Service-level pre-check → HTTP 409 on duplicate; DB constraint as safety net |
+| `projects` | Global (`projects.name` DB unique constraint) | Service-level pre-check → HTTP 409 on duplicate; DB constraint as safety net |
+| `applications` | Per project (`(project_id, name)` unique constraint) | 5-char hex suffix appended on creation (e.g. `my-app` → `my-app-3f2a1`); suffix space (~1 M combinations) eliminates the need for a pre-check |
+
+The suffixed application name is returned in the create response and is the stable identity used in ArgoCD. Callers must store it — the original base name alone is not a valid lookup key.
+
+## Immutable fields
+
+The following fields cannot be changed after creation via any API call:
+
+| Resource | Immutable fields |
+|---|---|
+| Cluster | `name`, `cluster_partition_id` |
+| Project | `name`, `project_partition_id`, `created_by` |
+| Application | `name`, `project_id`, `application_partition_id` |
+
+Update endpoints silently ignore these fields if they are included in the request body.
+
+## Cluster must be in project
+
+An application's target cluster must be a member of the application's project (`project_clusters` row must exist). The service validates this on creation and rejects the request with HTTP 400 if the cluster is not assigned to the project.
+
+## Application cluster update
+
+On update, an application's `cluster_id` may be changed, but only to a cluster that is already assigned to the same project.

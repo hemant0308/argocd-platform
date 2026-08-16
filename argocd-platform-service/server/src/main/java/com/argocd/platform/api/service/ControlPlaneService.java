@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -23,11 +24,9 @@ public class ControlPlaneService {
         ControlPlanesEntity entity = new ControlPlanesEntity()
                 .setName(request.getName())
                 .setServer(request.getServer())
-                .setCapacity(request.getCapacity())
                 .setStatus(ResourceStatus.UNKNOWN.name());
 
-        ControlPlanesEntity saved = controlPlaneRepository.save(entity);
-        return toResponse(saved);
+        return controlPlaneRepository.save(entity, request.getEndpoint());
     }
 
     @Transactional
@@ -37,22 +36,27 @@ public class ControlPlaneService {
                         "Control plane not found: " + id));
 
         existing.setName(request.getName())
-                .setServer(request.getServer())
-                .setCapacity(request.getCapacity());
+                .setServer(request.getServer());
 
-        ControlPlanesEntity updated = controlPlaneRepository.update(id, existing);
-        return toResponse(updated);
+        return controlPlaneRepository.update(id, existing, request.getEndpoint());
     }
 
-    private ControlPlaneResponse toResponse(ControlPlanesEntity e) {
-        return ControlPlaneResponse.builder()
-                .id(e.getId())
-                .name(e.getName())
-                .server(e.getServer())
-                .status(e.getStatus())
-                .capacity(e.getCapacity())
-                .createdAt(e.getCreatedAt())
-                .updatedAt(e.getUpdatedAt())
-                .build();
+    /**
+     * Returns all control planes including endpoint, ordered by id.
+     */
+    public List<ControlPlaneResponse> list() {
+        return controlPlaneRepository.findAllWithEndpoint();
+    }
+
+    /**
+     * Deletes a control plane by id.
+     * Fails with 409 if clusters still reference this control plane.
+     */
+    @Transactional
+    public void delete(UUID id) {
+        controlPlaneRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Control plane not found: " + id));
+        controlPlaneRepository.deleteById(id);
     }
 }

@@ -1,7 +1,5 @@
 package com.argocd.platform.api.model.request;
 
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotEmpty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -30,7 +28,7 @@ import java.util.UUID;
 @AllArgsConstructor
 public class ApplicationRequest {
 
-    @NotBlank(message = "Application name is required")
+    /** Required on create; ignored on update (name is immutable). */
     private String name;
 
     /** Project UUID. Validated against DB when present. Takes precedence over projectName. */
@@ -49,8 +47,7 @@ public class ApplicationRequest {
      * ArgoCD source definitions. Each entry is a free-form map matching the ArgoCD
      * Application {@code spec.source} / {@code spec.sources} schema — repoURL, path,
      * chart, targetRevision, helm, kustomize, directory, plugin, ref, etc.
-     * At least one source is required.
+     * Validated manually in the service — at least one source is required on both create and update.
      */
-    @NotEmpty(message = "At least one application source is required")
     private List<Map<String, Object>> sources;
 }

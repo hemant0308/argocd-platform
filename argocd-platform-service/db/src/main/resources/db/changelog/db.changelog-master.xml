@@ -9,5 +9,6 @@
     <include file="db/changelog/changes/v1.0.1-add-cluster-fields.xml"/>
     <include file="db/changelog/changes/v1.0.2-add-cluster-auth.xml"/>
     <include file="db/changelog/changes/v1.0.3-simplify-application-sources.xml"/>
+    <include file="db/changelog/changes/v1.0.4-control-plane-endpoint.xml"/>
 
 </databaseChangeLog>

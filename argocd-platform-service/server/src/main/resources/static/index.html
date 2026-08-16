@@ -1,0 +1,942 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ArgoCD Platform — Resource Manager</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 14px;
+      background: #f0f2f5;
+      color: #1a1a2e;
+    }
+
+    /* ── Header ── */
+    header {
+      background: #1a1a2e;
+      color: #fff;
+      padding: 0 24px;
+      display: flex;
+      align-items: center;
+      height: 56px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.3);
+    }
+    header h1 { font-size: 18px; font-weight: 600; letter-spacing: .3px; }
+    header span { margin-left: 8px; font-size: 12px; opacity: .5; }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed; top: 16px; right: 16px; z-index: 9999;
+      min-width: 260px; max-width: 440px;
+      padding: 12px 16px; border-radius: 6px;
+      font-size: 13px; line-height: 1.4;
+      box-shadow: 0 4px 14px rgba(0,0,0,.18);
+      display: none;
+      white-space: pre-wrap;
+    }
+    #toast.success { background: #16a34a; color: #fff; }
+    #toast.error   { background: #dc2626; color: #fff; }
+
+    /* ── Tabs ── */
+    .tabs {
+      display: flex; gap: 2px;
+      background: #1a1a2e;
+      padding: 0 24px;
+    }
+    .tab-btn {
+      padding: 12px 24px;
+      background: transparent;
+      border: none; border-bottom: 3px solid transparent;
+      color: rgba(255,255,255,.6);
+      cursor: pointer; font-size: 13px; font-weight: 500;
+      transition: color .15s, border-color .15s;
+    }
+    .tab-btn:hover  { color: #fff; }
+    .tab-btn.active { color: #fff; border-bottom-color: #60a5fa; }
+
+    /* ── Content ── */
+    .tab-panel { display: none; padding: 24px; }
+    .tab-panel.active { display: block; }
+
+    /* ── Panel card ── */
+    .card {
+      background: #fff;
+      border-radius: 8px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+      overflow: hidden;
+    }
+    .card-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .card-header h2 { font-size: 15px; font-weight: 600; }
+
+    /* ── Button ── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 7px 14px; border-radius: 6px;
+      border: none; cursor: pointer; font-size: 13px; font-weight: 500;
+      transition: opacity .15s;
+    }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-primary   { background: #2563eb; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+    .btn-sm        { padding: 4px 10px; font-size: 12px; }
+    .btn-edit      { background: #f59e0b; color: #fff; }
+    .btn-edit:hover { background: #d97706; }
+    .btn-delete    { background: #ef4444; color: #fff; }
+    .btn-delete:hover { background: #dc2626; }
+    .btn-secondary { background: #e5e7eb; color: #374151; }
+    .btn-secondary:hover { background: #d1d5db; }
+
+    /* ── Table ── */
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    thead tr { background: #f9fafb; }
+    th, td {
+      padding: 10px 16px;
+      text-align: left;
+      border-bottom: 1px solid #e5e7eb;
+      font-size: 13px;
+    }
+    th { font-weight: 600; color: #6b7280; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; }
+    tbody tr:hover { background: #f9fafb; }
+    td.actions { white-space: nowrap; }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 9999px;
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+    }
+    .badge-unknown { background: #e5e7eb; color: #374151; }
+    .badge-active  { background: #d1fae5; color: #065f46; }
+    .badge-error   { background: #fee2e2; color: #991b1b; }
+    .mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; color: #6b7280; }
+    .empty-state { padding: 48px; text-align: center; color: #9ca3af; }
+    a.rl { color: #2563eb; text-decoration: none; font-weight: 600; }
+    a.rl:hover { color: #1d4ed8; text-decoration: underline; }
+
+    /* ── Modal ── */
+    .modal-backdrop {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,.45); z-index: 1000;
+      align-items: center; justify-content: center;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      background: #fff; border-radius: 10px;
+      width: 520px; max-width: 95vw; max-height: 90vh;
+      overflow-y: auto;
+      box-shadow: 0 20px 60px rgba(0,0,0,.25);
+    }
+    .modal-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 20px 24px 16px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .modal-header h3 { font-size: 16px; font-weight: 600; }
+    .modal-close {
+      background: none; border: none; cursor: pointer;
+      font-size: 20px; color: #9ca3af; line-height: 1;
+    }
+    .modal-close:hover { color: #374151; }
+    .modal-body   { padding: 20px 24px; }
+    .modal-footer {
+      padding: 16px 24px;
+      border-top: 1px solid #e5e7eb;
+      display: flex; justify-content: flex-end; gap: 10px;
+    }
+
+    /* ── Form ── */
+    .form-group { margin-bottom: 16px; }
+    label { display: block; font-size: 12px; font-weight: 600; color: #374151; margin-bottom: 4px; }
+    label .req { color: #ef4444; margin-left: 2px; }
+    input[type=text], input[type=url], input[type=number], textarea, select {
+      width: 100%; padding: 8px 10px;
+      border: 1px solid #d1d5db; border-radius: 6px;
+      font-size: 13px; font-family: inherit; color: #1a1a2e;
+      transition: border-color .15s;
+      background: #fff;
+    }
+    input:focus, textarea:focus, select:focus {
+      outline: none; border-color: #2563eb;
+      box-shadow: 0 0 0 3px rgba(37,99,235,.12);
+    }
+    .hint { font-size: 11px; color: #6b7280; margin-top: 3px; }
+    textarea { resize: vertical; min-height: 80px; font-family: "SFMono-Regular", Consolas, monospace; }
+    .checkbox-group { display: flex; align-items: center; gap: 8px; }
+    .checkbox-group input[type=checkbox] { width: auto; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>ArgoCD Platform</h1>
+  <span>Resource Manager</span>
+</header>
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="controlplanes">Control Planes</button>
+  <button class="tab-btn"        data-tab="clusters">Clusters</button>
+  <button class="tab-btn"        data-tab="projects">Projects</button>
+  <button class="tab-btn"        data-tab="applications">Applications</button>
+</div>
+
+<!-- ═══════════════════ CONTROL PLANES TAB ═══════════════════ -->
+<div id="tab-controlplanes" class="tab-panel active">
+  <div class="card">
+    <div class="card-header">
+      <h2>Control Planes</h2>
+      <button class="btn btn-primary" onclick="openCpModal()">+ Create Control Plane</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th><th>Server URL</th><th>Endpoint (Web UI)</th><th>Status</th>
+            <th>Created</th><th>Updated</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="cp-tbody"></tbody>
+      </table>
+    </div>
+    <div id="cp-empty" class="empty-state" style="display:none">No control planes registered yet.</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ CLUSTERS TAB ═══════════════════ -->
+<div id="tab-clusters" class="tab-panel">
+  <div class="card">
+    <div class="card-header">
+      <h2>Clusters</h2>
+      <button class="btn btn-primary" onclick="openClusterModal()">+ Create Cluster</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th><th>Server</th><th>Control Plane</th>
+            <th>Status</th><th>Namespaces</th><th>Created</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="clusters-tbody"></tbody>
+      </table>
+    </div>
+    <div id="clusters-empty" class="empty-state" style="display:none">No clusters registered yet.</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ PROJECTS TAB ═══════════════════ -->
+<div id="tab-projects" class="tab-panel">
+  <div class="card">
+    <div class="card-header">
+      <h2>Projects</h2>
+      <button class="btn btn-primary" onclick="openProjectModal()">+ Create Project</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th><th>Description</th><th>Status</th>
+            <th>Created By</th><th>Created</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="projects-tbody"></tbody>
+      </table>
+    </div>
+    <div id="projects-empty" class="empty-state" style="display:none">No projects registered yet.</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ APPLICATIONS TAB ═══════════════════ -->
+<div id="tab-applications" class="tab-panel">
+  <div class="card">
+    <div class="card-header">
+      <h2>Applications</h2>
+      <button class="btn btn-primary" onclick="openAppModal()">+ Create Application</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th><th>Project</th><th>Cluster</th><th>Control Plane</th>
+            <th>Status</th><th>Generation</th><th>Created</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="applications-tbody"></tbody>
+      </table>
+    </div>
+    <div id="applications-empty" class="empty-state" style="display:none">No applications registered yet.</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ CONTROL PLANE MODAL ═══════════════════ -->
+<div id="cp-modal" class="modal-backdrop" onclick="closeOnBackdrop(event,'cp-modal')">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="cp-modal-title">Create Control Plane</h3>
+      <button class="modal-close" onclick="closeModal('cp-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Name <span class="req">*</span></label>
+        <input id="cp-name" type="text" placeholder="cp-01" />
+      </div>
+      <div class="form-group">
+        <label>Server URL <span class="req">*</span></label>
+        <input id="cp-server" type="text" placeholder="https://argocd-server.example.com:443" />
+        <div class="hint">ArgoCD server API URL (used for ArgoCD API calls and cluster registration).</div>
+      </div>
+      <div class="form-group">
+        <label>Endpoint (Web UI URL)</label>
+        <input id="cp-endpoint" type="text" placeholder="https://argocd.example.com" />
+        <div class="hint">ArgoCD web UI base URL — used for navigation links (application, cluster, control plane links).</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('cp-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitCp()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ CLUSTER MODAL ═══════════════════ -->
+<div id="cluster-modal" class="modal-backdrop" onclick="closeOnBackdrop(event,'cluster-modal')">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="cluster-modal-title">Create Cluster</h3>
+      <button class="modal-close" onclick="closeModal('cluster-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Name <span class="req">*</span></label>
+        <input id="c-name" type="text" placeholder="prod-us-east-1" />
+        <div class="hint">Immutable after creation.</div>
+      </div>
+      <div class="form-group">
+        <label>Server URL <span class="req">*</span></label>
+        <input id="c-server" type="text" placeholder="https://k8s.example.com:6443" />
+      </div>
+      <div class="form-group">
+        <label>Control Plane</label>
+        <input id="c-cp" type="text" placeholder="cp-01 (leave blank for auto-assignment)" />
+        <div class="hint">Blank → consistent-hash auto-assignment.</div>
+      </div>
+      <div class="form-group" id="c-reassign-row" style="display:none">
+        <div class="checkbox-group">
+          <input type="checkbox" id="c-reassign" />
+          <label for="c-reassign" style="margin:0">Reassign control plane</label>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Namespaces <span style="font-weight:400;color:#6b7280">(JSON array)</span></label>
+        <textarea id="c-namespaces" rows="2" placeholder='["default","kube-system"]'></textarea>
+      </div>
+      <div class="form-group">
+        <label>Labels <span style="font-weight:400;color:#6b7280">(JSON object)</span></label>
+        <textarea id="c-labels" rows="2" placeholder='{"env":"prod","region":"us-east-1"}'></textarea>
+      </div>
+      <div class="form-group">
+        <label>Auth <span style="font-weight:400;color:#6b7280">(JSON object)</span></label>
+        <textarea id="c-auth" rows="2" placeholder='{"type":"BEARER","token":"..."}'></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('cluster-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitCluster()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ PROJECT MODAL ═══════════════════ -->
+<div id="project-modal" class="modal-backdrop" onclick="closeOnBackdrop(event,'project-modal')">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="project-modal-title">Create Project</h3>
+      <button class="modal-close" onclick="closeModal('project-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Name <span class="req">*</span></label>
+        <input id="p-name" type="text" placeholder="my-team-project" />
+        <div class="hint">Immutable after creation.</div>
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <input id="p-desc" type="text" placeholder="Optional description" />
+      </div>
+      <div class="form-group">
+        <label>Clusters <span style="font-weight:400;color:#6b7280">(JSON array)</span></label>
+        <textarea id="p-clusters" rows="3"
+          placeholder='[{"id":"uuid"},{"name":"prod-us-east-1"}]'></textarea>
+        <div class="hint">Each entry must have either <code>id</code> or <code>name</code>.</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('project-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitProject()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════ APPLICATION MODAL ═══════════════════ -->
+<div id="app-modal" class="modal-backdrop" onclick="closeOnBackdrop(event,'app-modal')">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="app-modal-title">Create Application</h3>
+      <button class="modal-close" onclick="closeModal('app-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Base Name <span class="req">*</span></label>
+        <input id="a-name" type="text" placeholder="my-app" />
+        <div class="hint">A 5-char hex suffix is appended automatically (e.g. my-app-3f2a1).</div>
+      </div>
+      <div class="form-group" id="a-project-row">
+        <label>Project <span class="req">*</span></label>
+        <select id="a-project" onchange="onProjectChange()">
+          <option value="">— select a project —</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Cluster <span class="req">*</span></label>
+        <select id="a-cluster">
+          <option value="">— select a cluster —</option>
+        </select>
+        <div class="hint">Cluster must be assigned to the selected project.</div>
+      </div>
+      <div class="form-group">
+        <label>Sources <span class="req">*</span> <span style="font-weight:400;color:#6b7280">(JSON array of ArgoCD source objects)</span></label>
+        <textarea id="a-sources" rows="6"
+          placeholder='[{"repoURL":"https://github.com/org/repo","targetRevision":"HEAD","path":"charts/myapp"}]'></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('app-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitApp()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  /* ──────────────────────────────────────────────────────
+     State
+  ────────────────────────────────────────────────────── */
+  let controlPlanes = [];
+  let clusters      = [];
+  let projects      = [];
+  let apps          = [];
+
+  let editingCpId          = null;
+  let editingClusterId     = null;
+  let editingProjectId     = null;
+  let editingAppId         = null;
+
+  /* ──────────────────────────────────────────────────────
+     Tab switching
+  ────────────────────────────────────────────────────── */
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    });
+  });
+
+  /* ──────────────────────────────────────────────────────
+     Boot — load all data first, then render
+  ────────────────────────────────────────────────────── */
+  loadAll();
+
+  async function loadAll() {
+    try {
+      [controlPlanes, clusters, projects, apps] = await Promise.all([
+        apiFetch('/api/v1/control-planes').catch(() => []),
+        apiFetch('/api/v1/clusters').catch(() => []),
+        apiFetch('/api/v1/projects').catch(() => []),
+        apiFetch('/api/v1/applications').catch(() => []),
+      ]);
+    } catch (e) {
+      showToast('Failed to load data: ' + e.message, 'error');
+    }
+    renderControlPlanes();
+    renderClusters();
+    renderProjects();
+    renderApps();
+  }
+
+  /* ──────────────────────────────────────────────────────
+     Toast
+  ────────────────────────────────────────────────────── */
+  let toastTimer;
+  function showToast(msg, type = 'success') {
+    const t = document.getElementById('toast');
+    t.className = type;
+    t.textContent = msg;
+    t.style.display = 'block';
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.style.display = 'none'; }, 4000);
+  }
+
+  /* ──────────────────────────────────────────────────────
+     Modal helpers
+  ────────────────────────────────────────────────────── */
+  function openModal(id)  { document.getElementById(id).classList.add('open'); }
+  function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+  function closeOnBackdrop(e, id) {
+    if (e.target === document.getElementById(id)) closeModal(id);
+  }
+
+  /* ──────────────────────────────────────────────────────
+     Utility
+  ────────────────────────────────────────────────────── */
+  function fmtDate(s) {
+    if (!s) return '—';
+    return new Date(s).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  }
+  function badgeHtml(status) {
+    const cls = status === 'ACTIVE'  ? 'badge-active'
+              : status === 'UNKNOWN' ? 'badge-unknown'
+              :                        'badge-error';
+    return `<span class="badge ${cls}">${esc(status) || '—'}</span>`;
+  }
+  function parseJsonField(raw) {
+    if (!raw || !raw.trim()) return null;
+    try { return JSON.parse(raw.trim()); }
+    catch { throw new Error('Invalid JSON: ' + raw.trim()); }
+  }
+  async function apiFetch(url, opts = {}) {
+    const res = await fetch(url, {
+      headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+      ...opts,
+    });
+    if (res.status === 204) return null;
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      const msg = body?.message || body?.error || res.statusText;
+      throw new Error(`${res.status} — ${msg}`);
+    }
+    return body;
+  }
+  function esc(s) {
+    if (s == null) return '';
+    return String(s)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  /* ══════════════════════════════════════════════════════
+     CONTROL PLANES
+  ══════════════════════════════════════════════════════ */
+  function renderControlPlanes() {
+    const tbody = document.getElementById('cp-tbody');
+    const empty = document.getElementById('cp-empty');
+    if (!controlPlanes.length) { tbody.innerHTML = ''; empty.style.display = ''; return; }
+    empty.style.display = 'none';
+    tbody.innerHTML = controlPlanes.map(cp => {
+      const nameCell = cp.endpoint
+          ? `<a class="rl" href="${esc(cp.endpoint)}" target="_blank" rel="noopener">${esc(cp.name)}</a>`
+          : `<strong>${esc(cp.name)}</strong>`;
+      const endpointCell = cp.endpoint
+          ? `<a class="rl" href="${esc(cp.endpoint)}" target="_blank" rel="noopener">${esc(cp.endpoint)}</a>`
+          : '—';
+      return `
+      <tr>
+        <td>${nameCell}</td>
+        <td class="mono">${esc(cp.server || '—')}</td>
+        <td>${endpointCell}</td>
+        <td>${badgeHtml(cp.status)}</td>
+        <td>${fmtDate(cp.createdAt)}</td>
+        <td>${fmtDate(cp.updatedAt)}</td>
+        <td class="actions">
+          <button class="btn btn-sm btn-edit"   onclick="openCpModal('${cp.id}')">Edit</button>
+          <button class="btn btn-sm btn-delete" onclick="deleteCp('${cp.id}','${esc(cp.name)}')">Delete</button>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  function openCpModal(id) {
+    editingCpId = id || null;
+    const isEdit = !!id;
+    document.getElementById('cp-modal-title').textContent = isEdit ? 'Edit Control Plane' : 'Create Control Plane';
+    document.getElementById('cp-name').value     = '';
+    document.getElementById('cp-server').value   = '';
+    document.getElementById('cp-endpoint').value = '';
+    if (isEdit) {
+      const cp = controlPlanes.find(x => x.id === id);
+      if (cp) {
+        document.getElementById('cp-name').value     = cp.name || '';
+        document.getElementById('cp-server').value   = cp.server || '';
+        document.getElementById('cp-endpoint').value = cp.endpoint || '';
+      }
+    }
+    openModal('cp-modal');
+  }
+
+  async function submitCp() {
+    const name     = document.getElementById('cp-name').value.trim();
+    const server   = document.getElementById('cp-server').value.trim();
+    const endpoint = document.getElementById('cp-endpoint').value.trim();
+
+    if (!name)   { showToast('Name is required.', 'error'); return; }
+    if (!server) { showToast('Server URL is required.', 'error'); return; }
+
+    const body = { name, server, endpoint: endpoint || null };
+    try {
+      if (editingCpId) {
+        await apiFetch(`/api/v1/control-planes/${editingCpId}`, { method: 'PUT', body: JSON.stringify(body) });
+        showToast('Control plane updated.');
+      } else {
+        await apiFetch('/api/v1/control-planes', { method: 'POST', body: JSON.stringify(body) });
+        showToast('Control plane created.');
+      }
+      closeModal('cp-modal');
+      controlPlanes = await apiFetch('/api/v1/control-planes').catch(() => []);
+      renderControlPlanes();
+    } catch (e) { showToast(e.message, 'error'); }
+  }
+
+  async function deleteCp(id, name) {
+    if (!confirm(`Delete control plane "${name}"?\n\nThis will fail if clusters are still assigned to it.`)) return;
+    try {
+      await apiFetch(`/api/v1/control-planes/${id}`, { method: 'DELETE' });
+      showToast('Control plane deleted.');
+      controlPlanes = await apiFetch('/api/v1/control-planes').catch(() => []);
+      renderControlPlanes();
+    } catch (e) { showToast(e.message, 'error'); }
+  }
+
+  /* ══════════════════════════════════════════════════════
+     CLUSTERS
+  ══════════════════════════════════════════════════════ */
+  function renderClusters() {
+    const tbody = document.getElementById('clusters-tbody');
+    const empty = document.getElementById('clusters-empty');
+    if (!clusters.length) { tbody.innerHTML = ''; empty.style.display = ''; return; }
+    empty.style.display = 'none';
+    tbody.innerHTML = clusters.map(c => {
+      const cp = controlPlanes.find(x => x.name === c.controlPlaneName);
+      const cpEndpoint = cp ? cp.endpoint : null;
+      const clusterLink = cpEndpoint && c.server
+          ? `${cpEndpoint}/settings/clusters/${encodeURIComponent(c.server)}`
+          : null;
+      const nameCell = clusterLink
+          ? `<a class="rl" href="${esc(clusterLink)}" target="_blank" rel="noopener">${esc(c.name)}</a>`
+          : `<strong>${esc(c.name)}</strong>`;
+      const cpCell = cpEndpoint
+          ? `<a class="rl" href="${esc(cpEndpoint)}" target="_blank" rel="noopener">${esc(c.controlPlaneName)}</a>`
+          : esc(c.controlPlaneName || '—');
+      return `
+      <tr>
+        <td>${nameCell}</td>
+        <td class="mono">${esc(c.server || '—')}</td>
+        <td>${cpCell}</td>
+        <td>${badgeHtml(c.status)}</td>
+        <td class="mono">${c.namespaces ? JSON.stringify(c.namespaces) : '—'}</td>
+        <td>${fmtDate(c.createdAt)}</td>
+        <td class="actions">
+          <button class="btn btn-sm btn-edit"   onclick="openClusterModal('${c.id}')">Edit</button>
+          <button class="btn btn-sm btn-delete" onclick="deleteCluster('${c.id}','${esc(c.name)}')">Delete</button>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  function openClusterModal(id) {
+    editingClusterId = id || null;
+    const isEdit = !!id;
+    document.getElementById('cluster-modal-title').textContent = isEdit ? 'Edit Cluster' : 'Create Cluster';
+    document.getElementById('c-name').disabled = isEdit;
+    document.getElementById('c-reassign-row').style.display = isEdit ? '' : 'none';
+    ['c-name','c-server','c-cp','c-namespaces','c-labels','c-auth'].forEach(f =>
+      document.getElementById(f).value = '');
+    document.getElementById('c-reassign').checked = false;
+    if (isEdit) {
+      const c = clusters.find(x => x.id === id);
+      if (c) {
+        document.getElementById('c-name').value       = c.name || '';
+        document.getElementById('c-server').value     = c.server || '';
+        document.getElementById('c-cp').value         = c.controlPlaneName || '';
+        document.getElementById('c-namespaces').value = c.namespaces ? JSON.stringify(c.namespaces, null, 2) : '';
+        document.getElementById('c-labels').value     = c.labels ? JSON.stringify(c.labels, null, 2) : '';
+        document.getElementById('c-auth').value       = c.auth ? JSON.stringify(c.auth, null, 2) : '';
+      }
+    }
+    openModal('cluster-modal');
+  }
+
+  async function submitCluster() {
+    const name     = document.getElementById('c-name').value.trim();
+    const server   = document.getElementById('c-server').value.trim();
+    const cp       = document.getElementById('c-cp').value.trim();
+    const reassign = document.getElementById('c-reassign').checked;
+    if (!server) { showToast('Server URL is required.', 'error'); return; }
+    if (!editingClusterId && !name) { showToast('Name is required.', 'error'); return; }
+    let namespaces, labels, auth;
+    try {
+      namespaces = parseJsonField(document.getElementById('c-namespaces').value);
+      labels     = parseJsonField(document.getElementById('c-labels').value);
+      auth       = parseJsonField(document.getElementById('c-auth').value);
+    } catch (e) { showToast(e.message, 'error'); return; }
+    const body = { server, namespaces, labels, auth };
+    if (cp) body.controlPlane = cp;
+    if (editingClusterId) body.reassignControlPlane = reassign;
+    else body.name = name;
+    try {
+      if (editingClusterId) {
+        await apiFetch(`/api/v1/clusters/${editingClusterId}`, { method: 'PUT', body: JSON.stringify(body) });
+        showToast('Cluster updated.');
+      } else {
+        await apiFetch('/api/v1/clusters', { method: 'POST', body: JSON.stringify(body) });
+        showToast('Cluster created.');
+      }
+      closeModal('cluster-modal');
+      clusters = await apiFetch('/api/v1/clusters').catch(() => []);
+      renderClusters();
+      renderApps(); // refresh app table — CP name may have changed
+    } catch (e) { showToast(e.message, 'error'); }
+  }
+
+  async function deleteCluster(id, name) {
+    if (!confirm(`Delete cluster "${name}"?\n\nThis will fail if applications reference it.`)) return;
+    try {
+      await apiFetch(`/api/v1/clusters/${id}`, { method: 'DELETE' });
+      showToast('Cluster deleted.');
+      clusters = await apiFetch('/api/v1/clusters').catch(() => []);
+      renderClusters();
+      renderApps();
+    } catch (e) { showToast(e.message, 'error'); }
+  }
+
+  /* ══════════════════════════════════════════════════════
+     PROJECTS
+  ══════════════════════════════════════════════════════ */
+  function renderProjects() {
+    const tbody = document.getElementById('projects-tbody');
+    const empty = document.getElementById('projects-empty');
+    if (!projects.length) { tbody.innerHTML = ''; empty.style.display = ''; return; }
+    empty.style.display = 'none';
+    tbody.innerHTML = projects.map(p => `
+      <tr>
+        <td><strong>${esc(p.name)}</strong></td>
+        <td>${esc(p.description || '—')}</td>
+        <td>${badgeHtml(p.status)}</td>
+        <td class="mono">${esc(p.createdBy || '—')}</td>
+        <td>${fmtDate(p.createdAt)}</td>
+        <td class="actions">
+          <button class="btn btn-sm btn-edit"   onclick="openProjectModal('${p.id}')">Edit</button>
+          <button class="btn btn-sm btn-delete" onclick="deleteProject('${p.id}','${esc(p.name)}')">Delete</button>
+        </td>
+      </tr>`).join('');
+  }
+
+  function openProjectModal(id) {
+    editingProjectId = id || null;
+    const isEdit = !!id;
+    document.getElementById('project-modal-title').textContent = isEdit ? 'Edit Project' : 'Create Project';
+    document.getElementById('p-name').disabled = isEdit;
+    ['p-name','p-desc','p-clusters'].forEach(f =>
+      document.getElementById(f).value = '');
+    if (isEdit) {
+      const p = projects.find(x => x.id === id);
+      if (p) {
+        document.getElementById('p-name').value = p.name || '';
+        document.getElementById('p-desc').value = p.description || '';
+        // Pre-fill clusters as [{name:"..."},{name:"..."}] so the user can see and edit them
+        if (p.clusters && p.clusters.length) {
+          const refs = p.clusters.map(c => ({ name: c.name }));
+          document.getElementById('p-clusters').value = JSON.stringify(refs, null, 2);
+        }
+      }
+    }
+    openModal('project-modal');
+  }
+
+  async function submitProject() {
+    const name   = document.getElementById('p-name').value.trim();
+    const desc   = document.getElementById('p-desc').value.trim();
+    const isEdit = !!editingProjectId;
+    if (!isEdit && !name) { showToast('Name is required.', 'error'); return; }
+    let clusterRefs;
+    try {
+      const raw = document.getElementById('p-clusters').value;
+      clusterRefs = raw.trim() ? JSON.parse(raw.trim()) : [];
+    } catch { showToast('Clusters field must be a valid JSON array.', 'error'); return; }
+    const body = { description: desc || null, clusters: clusterRefs };
+    if (!isEdit) { body.name = name; }
+    try {
+      if (isEdit) {
+        await apiFetch(`/api/v1/projects/${editingProjectId}`, { method: 'PUT', body: JSON.stringify(body) });
+        showToast('Project updated.');
+      } else {
+        await apiFetch('/api/v1/projects', { method: 'POST', body: JSON.stringify(body) });
+        showToast('Project created.');
+      }
+      closeModal('project-modal');
+      projects = await apiFetch('/api/v1/projects').catch(() => []);
+      renderProjects();
+      renderApps();
+    } catch (e) { showToast(e.message, 'error'); }
+  }
+
+  async function deleteProject(id, name) {
+    if (!confirm(`Delete project "${name}"?\n\n⚠ All applications in this project will also be deleted.`)) return;
+    try {
+      await apiFetch(`/api/v1/projects/${id}`, { method: 'DELETE' });
+      showToast('Project deleted.');
+      [projects, apps] = await Promise.all([
+        apiFetch('/api/v1/projects').catch(() => []),
+        apiFetch('/api/v1/applications').catch(() => []),
+      ]);
+      renderProjects();
+      renderApps();
+    } catch (e) { showToast(e.message, 'error'); }
+  }
+
+  /* ══════════════════════════════════════════════════════
+     APPLICATIONS
+  ══════════════════════════════════════════════════════ */
+  function renderApps() {
+    const tbody = document.getElementById('applications-tbody');
+    const empty = document.getElementById('applications-empty');
+    if (!apps.length) { tbody.innerHTML = ''; empty.style.display = ''; return; }
+    empty.style.display = 'none';
+    tbody.innerHTML = apps.map(a => {
+      const project    = projects.find(p => p.id === a.projectId);
+      const cluster    = clusters.find(c => c.id === a.clusterId);
+      const cp         = cluster ? controlPlanes.find(x => x.name === cluster.controlPlaneName) : null;
+      const cpEndpoint = cp ? cp.endpoint : null;
+
+      // Application name → <endpoint>/applications/argocd/<name>
+      const appLink = cpEndpoint
+          ? `${cpEndpoint}/applications/argocd/${encodeURIComponent(a.name)}`
+          : null;
+      const nameCell = appLink
+          ? `<a class="rl" href="${esc(appLink)}" target="_blank" rel="noopener">${esc(a.name)}</a>`
+          : `<strong>${esc(a.name)}</strong>`;
+
+      // Cluster name → <endpoint>/settings/clusters/<encoded-server-url>
+      const clusterLink = cpEndpoint && cluster && cluster.server
+          ? `${cpEndpoint}/settings/clusters/${encodeURIComponent(cluster.server)}`
+          : null;
+      const clusterCell = cluster
+          ? (clusterLink
+              ? `<a class="rl" href="${esc(clusterLink)}" target="_blank" rel="noopener">${esc(cluster.name)}</a>`
+              : esc(cluster.name))
+          : '—';
+
+      // Control plane name → <endpoint>
+      const cpName = cluster ? (cluster.controlPlaneName || '—') : '—';
+      const cpCell = cpEndpoint
+          ? `<a class="rl" href="${esc(cpEndpoint)}" target="_blank" rel="noopener">${esc(cpName)}</a>`
+          : esc(cpName);
+
+      return `
+      <tr>
+        <td>${nameCell}</td>
+        <td>${esc(project ? project.name : '—')}</td>
+        <td>${clusterCell}</td>
+        <td>${cpCell}</td>
+        <td>${badgeHtml(a.status)}</td>
+        <td>${a.generation ?? '—'}</td>
+        <td>${fmtDate(a.createdAt)}</td>
+        <td class="actions">
+          <button class="btn btn-sm btn-edit"   onclick="openAppModal('${a.id}')">Edit</button>
+          <button class="btn btn-sm btn-delete" onclick="deleteApp('${a.id}','${esc(a.name)}')">Delete</button>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  function populateProjectDropdown(selectedId) {
+    const sel = document.getElementById('a-project');
+    sel.innerHTML = '<option value="">— select a project —</option>' +
+      projects.map(p =>
+        `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${esc(p.name)}</option>`
+      ).join('');
+    populateClusterDropdown(null);
+  }
+
+  function populateClusterDropdown(selectedClusterId) {
+    const sel = document.getElementById('a-cluster');
+    sel.innerHTML = '<option value="">— select a cluster —</option>' +
+      clusters.map(c =>
+        `<option value="${c.id}" ${c.id === selectedClusterId ? 'selected' : ''}>${esc(c.name)}</option>`
+      ).join('');
+  }
+
+  function onProjectChange() {
+    populateClusterDropdown(null);
+  }
+
+  function openAppModal(id) {
+    editingAppId = id || null;
+    const isEdit = !!id;
+    document.getElementById('app-modal-title').textContent = isEdit ? 'Edit Application' : 'Create Application';
+    document.getElementById('a-name').disabled = isEdit;
+    document.getElementById('a-project-row').style.display = isEdit ? 'none' : '';
+    document.getElementById('a-name').value    = '';
+    document.getElementById('a-sources').value = '';
+    if (isEdit) {
+      const a = apps.find(x => x.id === id);
+      if (a) {
+        document.getElementById('a-name').value    = a.name || '';
+        document.getElementById('a-sources').value = a.sources
+            ? JSON.stringify(a.sources, null, 2) : '';
+        populateProjectDropdown(a.projectId);
+        populateClusterDropdown(a.clusterId);
+      }
+    } else {
+      populateProjectDropdown(null);
+    }
+    openModal('app-modal');
+  }
+
+  async function submitApp() {
+    const name      = document.getElementById('a-name').value.trim();
+    const projectId = document.getElementById('a-project').value;
+    const clusterId = document.getElementById('a-cluster').value;
+    const isEdit    = !!editingAppId;
+    if (!isEdit && !name)      { showToast('Base name is required.', 'error'); return; }
+    if (!isEdit && !projectId) { showToast('Project is required.', 'error'); return; }
+    if (!clusterId)            { showToast('Cluster is required.', 'error'); return; }
+    let sources;
+    try {
+      const raw = document.getElementById('a-sources').value;
+      if (!raw.trim()) { showToast('Sources are required.', 'error'); return; }
+      sources = JSON.parse(raw.trim());
+    } catch { showToast('Sources must be a valid JSON array.', 'error'); return; }
+    const body = { clusterId, sources };
+    if (!isEdit) { body.name = name; body.projectId = projectId; }
+    try {
+      if (isEdit) {
+        await apiFetch(`/api/v1/applications/${editingAppId}`, { method: 'PUT', body: JSON.stringify(body) });
+        showToast('Application updated.');
+      } else {
+        await apiFetch('/api/v1/applications', { method: 'POST', body: JSON.stringify(body) });
+        showToast('Application created.');
+      }
+      closeModal('app-modal');
+      apps = await apiFetch('/api/v1/applications').catch(() => []);
+      renderApps();
+    } catch (e) { showToast(e.message, 'error'); }
+  }
+
+  async function deleteApp(id, name) {
+    if (!confirm(`Delete application "${name}"?`)) return;
+    try {
+      await apiFetch(`/api/v1/applications/${id}`, { method: 'DELETE' });
+      showToast('Application deleted.');
+      apps = await apiFetch('/api/v1/applications').catch(() => []);
+      renderApps();
+    } catch (e) { showToast(e.message, 'error'); }
+  }
+</script>
+</body>
+</html>
