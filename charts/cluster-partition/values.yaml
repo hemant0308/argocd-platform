@@ -1,0 +1,13 @@
+# Partition number — identifies which cluster partition this chart manages.
+# Injected from the outer cluster-partitions ApplicationSet via valuesObject.
+partitionNumber: ""
+
+# Generation — bumped in the DB whenever clusters are added to or removed
+# from this partition. Embedding it as an annotation on the inner ApplicationSet
+# causes ArgoCD to re-sync this chart and re-evaluate the plugin generator.
+generation: ""
+
+# Source repository where charts/cluster-registration lives.
+# Must match the repoURL used by the outer bootstrap application.
+repoURL: https://github.com/hemant0308/argocd-platform.git
+targetRevision: main
