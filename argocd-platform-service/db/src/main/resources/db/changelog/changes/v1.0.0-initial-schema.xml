@@ -1,0 +1,483 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
+
+    <!-- =========================================================
+         Enable UUID extension
+         ========================================================= -->
+    <changeSet id="v1.0.0-enable-uuid-extension" author="argocd-platform">
+        <sql>CREATE EXTENSION IF NOT EXISTS "uuid-ossp"</sql>
+        <rollback>DROP EXTENSION IF EXISTS "uuid-ossp"</rollback>
+    </changeSet>
+
+    <!-- =========================================================
+         control_planes
+         Represents individual ArgoCD control plane instances.
+         Clusters and their applications are executed here.
+         ========================================================= -->
+    <changeSet id="v1.0.0-create-control-planes" author="argocd-platform">
+        <createTable tableName="control_planes" remarks="ArgoCD control plane instances">
+            <column name="id" type="UUID" defaultValueComputed="uuid_generate_v4()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="name" type="VARCHAR(255)">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="server" type="VARCHAR(500)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="VARCHAR(50)" defaultValue="ACTIVE">
+                <constraints nullable="false"/>
+            </column>
+            <column name="capacity" type="INTEGER"/>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+        </createTable>
+
+        <createIndex indexName="idx_control_planes_status" tableName="control_planes">
+            <column name="status"/>
+        </createIndex>
+    </changeSet>
+
+    <!-- =========================================================
+         project_partitions
+         Stable reconciliation buckets for projects.
+         ========================================================= -->
+    <changeSet id="v1.0.0-create-project-partitions" author="argocd-platform">
+        <createTable tableName="project_partitions" remarks="Stable reconciliation partitions for projects">
+            <column name="id" type="UUID" defaultValueComputed="uuid_generate_v4()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="partition_number" type="INTEGER">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="status" type="VARCHAR(50)" defaultValue="ACTIVE">
+                <constraints nullable="false"/>
+            </column>
+            <column name="generation" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+        </createTable>
+
+        <createIndex indexName="idx_project_partitions_status" tableName="project_partitions">
+            <column name="status"/>
+        </createIndex>
+    </changeSet>
+
+    <!-- =========================================================
+         cluster_partitions
+         Stable reconciliation buckets for clusters.
+         ========================================================= -->
+    <changeSet id="v1.0.0-create-cluster-partitions" author="argocd-platform">
+        <createTable tableName="cluster_partitions" remarks="Stable reconciliation partitions for clusters">
+            <column name="id" type="UUID" defaultValueComputed="uuid_generate_v4()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="partition_number" type="INTEGER">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="status" type="VARCHAR(50)" defaultValue="ACTIVE">
+                <constraints nullable="false"/>
+            </column>
+            <column name="generation" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+        </createTable>
+
+        <createIndex indexName="idx_cluster_partitions_status" tableName="cluster_partitions">
+            <column name="status"/>
+        </createIndex>
+    </changeSet>
+
+    <!-- =========================================================
+         application_partitions
+         Stable reconciliation buckets for applications.
+         Independent of project partitions.
+         ========================================================= -->
+    <changeSet id="v1.0.0-create-application-partitions" author="argocd-platform">
+        <createTable tableName="application_partitions" remarks="Stable reconciliation partitions for applications">
+            <column name="id" type="UUID" defaultValueComputed="uuid_generate_v4()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="partition_number" type="INTEGER">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="status" type="VARCHAR(50)" defaultValue="ACTIVE">
+                <constraints nullable="false"/>
+            </column>
+            <column name="generation" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+        </createTable>
+
+        <createIndex indexName="idx_application_partitions_status" tableName="application_partitions">
+            <column name="status"/>
+        </createIndex>
+    </changeSet>
+
+    <!-- =========================================================
+         users
+         Platform user identities (may be backed by external IdP).
+         ========================================================= -->
+    <changeSet id="v1.0.0-create-users" author="argocd-platform">
+        <createTable tableName="users" remarks="Platform users">
+            <column name="id" type="UUID" defaultValueComputed="uuid_generate_v4()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="username" type="VARCHAR(255)">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="status" type="VARCHAR(50)" defaultValue="ACTIVE">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+        </createTable>
+
+        <createIndex indexName="idx_users_username" tableName="users">
+            <column name="username"/>
+        </createIndex>
+
+        <createIndex indexName="idx_users_status" tableName="users">
+            <column name="status"/>
+        </createIndex>
+    </changeSet>
+
+    <!-- =========================================================
+         projects
+         Primary authorization boundary for platform users.
+         Each project belongs to a stable project partition.
+         ========================================================= -->
+    <changeSet id="v1.0.0-create-projects" author="argocd-platform">
+        <createTable tableName="projects" remarks="ArgoCD platform projects — primary authorization boundary">
+            <column name="id" type="UUID" defaultValueComputed="uuid_generate_v4()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="name" type="VARCHAR(255)">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="description" type="TEXT"/>
+            <column name="status" type="VARCHAR(50)" defaultValue="ACTIVE">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_by" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="project_partition_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+        </createTable>
+
+        <addForeignKeyConstraint
+                baseTableName="projects"
+                baseColumnNames="created_by"
+                referencedTableName="users"
+                referencedColumnNames="id"
+                constraintName="fk_projects_created_by"/>
+
+        <addForeignKeyConstraint
+                baseTableName="projects"
+                baseColumnNames="project_partition_id"
+                referencedTableName="project_partitions"
+                referencedColumnNames="id"
+                constraintName="fk_projects_project_partition"/>
+
+        <createIndex indexName="idx_projects_status" tableName="projects">
+            <column name="status"/>
+        </createIndex>
+
+        <createIndex indexName="idx_projects_project_partition_id" tableName="projects">
+            <column name="project_partition_id"/>
+        </createIndex>
+
+        <createIndex indexName="idx_projects_created_by" tableName="projects">
+            <column name="created_by"/>
+        </createIndex>
+    </changeSet>
+
+    <!-- =========================================================
+         project_members
+         Many-to-many: users ↔ projects with a role.
+         The Routing Service uses this for the primary authz check.
+         ========================================================= -->
+    <changeSet id="v1.0.0-create-project-members" author="argocd-platform">
+        <createTable tableName="project_members" remarks="Project membership and role assignments">
+            <column name="project_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="user_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="role" type="VARCHAR(100)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+        </createTable>
+
+        <addPrimaryKey
+                tableName="project_members"
+                columnNames="project_id, user_id"
+                constraintName="pk_project_members"/>
+
+        <addForeignKeyConstraint
+                baseTableName="project_members"
+                baseColumnNames="project_id"
+                referencedTableName="projects"
+                referencedColumnNames="id"
+                constraintName="fk_project_members_project"
+                onDelete="CASCADE"/>
+
+        <addForeignKeyConstraint
+                baseTableName="project_members"
+                baseColumnNames="user_id"
+                referencedTableName="users"
+                referencedColumnNames="id"
+                constraintName="fk_project_members_user"
+                onDelete="CASCADE"/>
+
+        <createIndex indexName="idx_project_members_project_id" tableName="project_members">
+            <column name="project_id"/>
+        </createIndex>
+
+        <createIndex indexName="idx_project_members_user_id" tableName="project_members">
+            <column name="user_id"/>
+        </createIndex>
+    </changeSet>
+
+    <!-- =========================================================
+         clusters
+         User Kubernetes clusters. Belong to a cluster partition
+         and are assigned to a control plane for reconciliation.
+         ========================================================= -->
+    <changeSet id="v1.0.0-create-clusters" author="argocd-platform">
+        <createTable tableName="clusters" remarks="User Kubernetes clusters">
+            <column name="id" type="UUID" defaultValueComputed="uuid_generate_v4()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="name" type="VARCHAR(255)">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="server" type="VARCHAR(500)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="VARCHAR(50)" defaultValue="ACTIVE">
+                <constraints nullable="false"/>
+            </column>
+            <column name="cluster_partition_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="control_plane_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+        </createTable>
+
+        <addForeignKeyConstraint
+                baseTableName="clusters"
+                baseColumnNames="cluster_partition_id"
+                referencedTableName="cluster_partitions"
+                referencedColumnNames="id"
+                constraintName="fk_clusters_cluster_partition"/>
+
+        <addForeignKeyConstraint
+                baseTableName="clusters"
+                baseColumnNames="control_plane_id"
+                referencedTableName="control_planes"
+                referencedColumnNames="id"
+                constraintName="fk_clusters_control_plane"/>
+
+        <createIndex indexName="idx_clusters_status" tableName="clusters">
+            <column name="status"/>
+        </createIndex>
+
+        <createIndex indexName="idx_clusters_cluster_partition_id" tableName="clusters">
+            <column name="cluster_partition_id"/>
+        </createIndex>
+
+        <createIndex indexName="idx_clusters_control_plane_id" tableName="clusters">
+            <column name="control_plane_id"/>
+        </createIndex>
+    </changeSet>
+
+    <!-- =========================================================
+         project_clusters
+         Many-to-many: projects ↔ clusters.
+         Determines which clusters a project may deploy to.
+         ========================================================= -->
+    <changeSet id="v1.0.0-create-project-clusters" author="argocd-platform">
+        <createTable tableName="project_clusters" remarks="Association between projects and clusters">
+            <column name="project_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="cluster_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="VARCHAR(50)" defaultValue="ACTIVE">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+        </createTable>
+
+        <addPrimaryKey
+                tableName="project_clusters"
+                columnNames="project_id, cluster_id"
+                constraintName="pk_project_clusters"/>
+
+        <addForeignKeyConstraint
+                baseTableName="project_clusters"
+                baseColumnNames="project_id"
+                referencedTableName="projects"
+                referencedColumnNames="id"
+                constraintName="fk_project_clusters_project"
+                onDelete="CASCADE"/>
+
+        <addForeignKeyConstraint
+                baseTableName="project_clusters"
+                baseColumnNames="cluster_id"
+                referencedTableName="clusters"
+                referencedColumnNames="id"
+                constraintName="fk_project_clusters_cluster"
+                onDelete="CASCADE"/>
+
+        <createIndex indexName="idx_project_clusters_project_id" tableName="project_clusters">
+            <column name="project_id"/>
+        </createIndex>
+
+        <createIndex indexName="idx_project_clusters_cluster_id" tableName="project_clusters">
+            <column name="cluster_id"/>
+        </createIndex>
+    </changeSet>
+
+    <!-- =========================================================
+         applications
+         User applications deployed via ArgoCD.
+         Ownership: project → application
+         Destination: cluster (control plane derived via cluster)
+         Scaling: application_partition (independent of project partition)
+         ========================================================= -->
+    <changeSet id="v1.0.0-create-applications" author="argocd-platform">
+        <createTable tableName="applications" remarks="User ArgoCD applications">
+            <column name="id" type="UUID" defaultValueComputed="uuid_generate_v4()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="name" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="project_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="cluster_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="application_partition_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="VARCHAR(50)" defaultValue="ACTIVE">
+                <constraints nullable="false"/>
+            </column>
+            <column name="generation" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+        </createTable>
+
+        <addUniqueConstraint
+                tableName="applications"
+                columnNames="project_id, name"
+                constraintName="uk_applications_project_name"/>
+
+        <addForeignKeyConstraint
+                baseTableName="applications"
+                baseColumnNames="project_id"
+                referencedTableName="projects"
+                referencedColumnNames="id"
+                constraintName="fk_applications_project"
+                onDelete="CASCADE"/>
+
+        <addForeignKeyConstraint
+                baseTableName="applications"
+                baseColumnNames="cluster_id"
+                referencedTableName="clusters"
+                referencedColumnNames="id"
+                constraintName="fk_applications_cluster"/>
+
+        <addForeignKeyConstraint
+                baseTableName="applications"
+                baseColumnNames="application_partition_id"
+                referencedTableName="application_partitions"
+                referencedColumnNames="id"
+                constraintName="fk_applications_application_partition"/>
+
+        <createIndex indexName="idx_applications_project_id" tableName="applications">
+            <column name="project_id"/>
+        </createIndex>
+
+        <createIndex indexName="idx_applications_cluster_id" tableName="applications">
+            <column name="cluster_id"/>
+        </createIndex>
+
+        <createIndex indexName="idx_applications_application_partition_id" tableName="applications">
+            <column name="application_partition_id"/>
+        </createIndex>
+
+        <createIndex indexName="idx_applications_status" tableName="applications">
+            <column name="status"/>
+        </createIndex>
+    </changeSet>
+
+    <!-- =========================================================
+         application_sources
+         Git/Helm sources for each application.
+         Supports multi-source applications (source_order).
+         ========================================================= -->
+    <changeSet id="v1.0.0-create-application-sources" author="argocd-platform">
+        <createTable tableName="application_sources" remarks="Git/Helm sources for ArgoCD applications">
+            <column name="id" type="UUID" defaultValueComputed="uuid_generate_v4()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="application_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+            <column name="repo_url" type="VARCHAR(500)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="revision" type="VARCHAR(255)">
+                <constraints nullable="false"/>
+            </column>
+            <column name="path" type="VARCHAR(500)"/>
+            <column name="chart" type="VARCHAR(255)"/>
+            <column name="values" type="TEXT"/>
+            <column name="source_order" type="INTEGER" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+        </createTable>
+
+        <addForeignKeyConstraint
+                baseTableName="application_sources"
+                baseColumnNames="application_id"
+                referencedTableName="applications"
+                referencedColumnNames="id"
+                constraintName="fk_application_sources_application"
+                onDelete="CASCADE"/>
+
+        <createIndex indexName="idx_application_sources_application_id" tableName="application_sources">
+            <column name="application_id"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

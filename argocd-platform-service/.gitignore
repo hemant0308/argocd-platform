@@ -1,0 +1,112 @@
+# ============================================================
+# Build output
+# ============================================================
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+# ============================================================
+# Maven
+# ============================================================
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+pom.xml.backup
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+
+# ============================================================
+# jOOQ generated sources (regenerated on each build)
+# ============================================================
+**/target/generated-sources/jooq/
+
+# ============================================================
+# IDE — IntelliJ IDEA / JetBrains
+# ============================================================
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+.idea_modules/
+
+# ============================================================
+# IDE — Eclipse
+# ============================================================
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings/
+.springBeans
+.sts4-cache
+
+# ============================================================
+# IDE — VS Code
+# ============================================================
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# ============================================================
+# IDE — NetBeans
+# ============================================================
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+# ============================================================
+# Spring Boot
+# ============================================================
+spring-shell.log
+/logs/
+*.log
+*.log.*
+
+# ============================================================
+# Secrets & environment
+# ============================================================
+.env
+.env.*
+*.env
+application-local.yml
+application-local.yaml
+application-local.properties
+*-secret.yml
+*-secret.yaml
+*-credentials.yml
+*-credentials.yaml
+
+# ============================================================
+# OS
+# ============================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ============================================================
+# Docker
+# ============================================================
+docker-compose.override.yml
+
+# ============================================================
+# Test reports & coverage
+# ============================================================
+/report/
+surefire-reports/
+jacoco.exec
+*.exec
