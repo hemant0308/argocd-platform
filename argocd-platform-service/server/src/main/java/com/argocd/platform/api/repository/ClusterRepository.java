@@ -4,6 +4,7 @@ import com.argocd.platform.api.model.response.argocd.ClusterItem;
 import com.argocd.platform.db.jooq.tables.pojos.ClustersEntity;
 import lombok.RequiredArgsConstructor;
 import org.jooq.DSLContext;
+import org.jooq.Field;
 import org.jooq.impl.DSL;
 import org.springframework.stereotype.Repository;
 
@@ -12,6 +13,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static com.argocd.platform.db.jooq.Tables.CLUSTERS;
+import static com.argocd.platform.db.jooq.Tables.CONTROL_PLANES;
 
 @Repository
 @RequiredArgsConstructor
@@ -72,17 +74,22 @@ public class ClusterRepository {
     }
 
     /**
-     * Returns all clusters in the given partition ordered by name.
+     * Returns all clusters in the given partition ordered by name, enriched with their
+     * control-plane name. LEFT JOIN on {@code control_planes} so clusters without a
+     * control-plane assignment are still returned with {@code controlPlane = null}.
      * Unknown {@code partitionId} returns an empty list.
      */
     public List<ClusterItem> findByPartitionId(UUID partitionId) {
-        return dsl.select(CLUSTERS.NAME, CLUSTERS.SERVER)
+        Field<String> cpNameField = CONTROL_PLANES.NAME.as("cp_name");
+        return dsl.select(CLUSTERS.NAME, CLUSTERS.SERVER, cpNameField)
                 .from(CLUSTERS)
+                .leftJoin(CONTROL_PLANES).on(CONTROL_PLANES.ID.eq(CLUSTERS.CONTROL_PLANE_ID))
                 .where(CLUSTERS.CLUSTER_PARTITION_ID.eq(partitionId))
                 .orderBy(CLUSTERS.NAME)
                 .fetch(r -> ClusterItem.builder()
                         .name(r.get(CLUSTERS.NAME))
                         .server(r.get(CLUSTERS.SERVER))
+                        .controlPlane(r.get(cpNameField))
                         .build());
     }
 }

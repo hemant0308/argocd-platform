@@ -12,4 +12,6 @@ import lombok.NoArgsConstructor;
 public class ClusterItem {
     private String name;
     private String server;
+    /** Name of the control plane this cluster is assigned to. {@code null} if unassigned. */
+    private String controlPlane;
 }
