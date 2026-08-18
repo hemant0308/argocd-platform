@@ -11,9 +11,11 @@ spec:
     targetRevision: main
     path: argocd/managed
     helm:
-      # Default values are committed at argocd/managed/values.yaml.
-      # Override per environment by passing valuesObject or additional valueFiles here,
-      # or by layering a gitignored values-local.yaml via the ArgoCD Application spec.
+      valuesObject:
+        releaseName: managed-argocd
+      # Default values live at argocd/managed/values.yaml (auto-loaded by Helm).
+      # Pass environment overrides via valuesObject or additional valueFiles here.
+
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
