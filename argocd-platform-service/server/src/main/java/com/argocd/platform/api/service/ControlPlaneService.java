@@ -1,5 +1,6 @@
 package com.argocd.platform.api.service;
 
+import com.argocd.platform.api.cache.event.PartitionChangedEvent;
 import com.argocd.platform.api.exception.ResourceNotFoundException;
 import com.argocd.platform.api.model.request.ControlPlaneRequest;
 import com.argocd.platform.api.model.response.ControlPlaneResponse;
@@ -7,6 +8,7 @@ import com.argocd.platform.api.repository.ControlPlaneRepository;
 import com.argocd.platform.api.util.ResourceStatus;
 import com.argocd.platform.db.jooq.tables.pojos.ControlPlanesEntity;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,6 +20,7 @@ import java.util.UUID;
 public class ControlPlaneService {
 
     private final ControlPlaneRepository controlPlaneRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public ControlPlaneResponse create(ControlPlaneRequest request) {
@@ -26,7 +29,11 @@ public class ControlPlaneService {
                 .setServer(request.getServer())
                 .setStatus(ResourceStatus.UNKNOWN.name());
 
-        return controlPlaneRepository.save(entity, request.getEndpoint());
+        ControlPlaneResponse response = controlPlaneRepository.save(entity, request.getEndpoint());
+        // A new control plane appears in project-partitions (fan-out list) and project-groups.
+        // Publish null partitionId to signal "clear all" to the cache invalidation listener.
+        publishClearAll();
+        return response;
     }
 
     @Transactional
@@ -38,7 +45,9 @@ public class ControlPlaneService {
         existing.setName(request.getName())
                 .setServer(request.getServer());
 
-        return controlPlaneRepository.update(id, existing, request.getEndpoint());
+        ControlPlaneResponse response = controlPlaneRepository.update(id, existing, request.getEndpoint());
+        publishClearAll();
+        return response;
     }
 
     /**
@@ -58,5 +67,18 @@ public class ControlPlaneService {
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Control plane not found: " + id));
         controlPlaneRepository.deleteById(id);
+        publishClearAll();
+    }
+
+    /**
+     * Publishes a {@link PartitionChangedEvent} with a null partition ID, signalling
+     * that the cache invalidation listener should clear all cached entries.
+     *
+     * <p>Used for control-plane mutations because they affect the project-partitions
+     * fan-out list (every project partition includes all CP names) and may re-group
+     * cluster-groups (clusters are grouped by CP name).
+     */
+    private void publishClearAll() {
+        eventPublisher.publishEvent(new PartitionChangedEvent(this, null, null));
     }
 }

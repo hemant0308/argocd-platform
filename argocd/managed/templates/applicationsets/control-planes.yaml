@@ -1,0 +1,48 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: control-planes
+  namespace: argocd
+
+spec:
+  generators:
+    - clusters:
+        selector:
+          matchLabels:
+            argocd-platform/control-plane: "true"
+
+  template:
+    metadata:
+      name: 'control-plane-{{`{{nameNormalized}}`}}'
+
+    spec:
+      project: default
+
+      sources:
+        # Public argo-cd Helm chart — version pinned in values.
+        - repoURL: https://argoproj.github.io/argo-helm
+          chart: argo-cd
+          targetRevision: {{ .Values.controlPlanes.argocdChartVersion | quote }}
+          helm:
+            valueFiles:
+              # Common values applied to all control planes.
+              - $values/control-planes/values/default.yaml
+              # Per-CP overrides. ArgoCD falls back gracefully if the file is absent.
+              - $values/control-planes/values/{{`{{name}}`}}/default.yaml
+
+        # This repo as a values reference source — ArgoCD resolves $values above
+        # against the root of this repository at the given revision.
+        - repoURL: {{ .Values.git.repoURL | quote }}
+          targetRevision: {{ .Values.git.targetRevision | quote }}
+          ref: values
+
+      destination:
+        server: '{{`{{server}}`}}'
+        namespace: argocd
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

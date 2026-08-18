@@ -1,11 +1,9 @@
 package com.argocd.platform.api.repository;
 
+import com.argocd.platform.api.util.JsonbUtils;
 import com.argocd.platform.db.jooq.tables.pojos.ApplicationsEntity;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.JSONB;
@@ -19,7 +17,6 @@ import java.util.UUID;
 
 import static com.argocd.platform.db.jooq.Tables.APPLICATIONS;
 
-@Slf4j
 @Repository
 @RequiredArgsConstructor
 public class ApplicationRepository {
@@ -29,7 +26,7 @@ public class ApplicationRepository {
     static final Field<JSONB> SOURCES = DSL.field(DSL.name("sources"), JSONB.class);
 
     private final DSLContext dsl;
-    private final ObjectMapper objectMapper;
+    private final JsonbUtils jsonbUtils;
 
     /**
      * Inserts a new application including its sources JSONB.
@@ -45,7 +42,7 @@ public class ApplicationRepository {
                 .set(APPLICATIONS.APPLICATION_PARTITION_ID, entity.getApplicationPartitionId())
                 .set(APPLICATIONS.STATUS, entity.getStatus())
                 .set(APPLICATIONS.GENERATION, entity.getGeneration())
-                .set(SOURCES, toJsonb(sources))
+                .set(SOURCES, jsonbUtils.toJsonb(sources))
                 .returning()
                 .fetchOneInto(ApplicationsEntity.class);
     }
@@ -60,7 +57,7 @@ public class ApplicationRepository {
         return dsl.update(APPLICATIONS)
                 .set(APPLICATIONS.CLUSTER_ID, entity.getClusterId())
                 .set(APPLICATIONS.GENERATION, entity.getGeneration())
-                .set(SOURCES, toJsonb(sources))
+                .set(SOURCES, jsonbUtils.toJsonb(sources))
                 .set(APPLICATIONS.UPDATED_AT, DSL.currentLocalDateTime())
                 .where(APPLICATIONS.ID.eq(id))
                 .returning()
@@ -109,30 +106,4 @@ public class ApplicationRepository {
                 .execute();
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
-    private JSONB toJsonb(Object value) {
-        if (value == null) {
-            return null;
-        }
-        try {
-            return JSONB.jsonb(objectMapper.writeValueAsString(value));
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to serialize sources to JSONB: " + e.getMessage(), e);
-        }
-    }
-
-    public <T> T fromJsonb(JSONB jsonb, TypeReference<T> typeRef) {
-        if (jsonb == null || jsonb.data() == null || jsonb.data().isBlank()) {
-            return null;
-        }
-        try {
-            return objectMapper.readValue(jsonb.data(), typeRef);
-        } catch (JsonProcessingException e) {
-            log.warn("Failed to deserialize JSONB '{}': {}", jsonb.data(), e.getMessage());
-            return null;
-        }
-    }
 }

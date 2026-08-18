@@ -1,11 +1,9 @@
 package com.argocd.platform.api.repository;
 
 import com.argocd.platform.api.model.response.argocd.ApplicationItem;
-import com.fasterxml.jackson.core.JsonProcessingException;
+import com.argocd.platform.api.util.JsonbUtils;
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.JSONB;
@@ -17,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 import static com.argocd.platform.db.jooq.Tables.APPLICATIONS;
@@ -24,7 +23,6 @@ import static com.argocd.platform.db.jooq.Tables.CLUSTERS;
 import static com.argocd.platform.db.jooq.Tables.CONTROL_PLANES;
 import static com.argocd.platform.db.jooq.Tables.PROJECTS;
 
-@Slf4j
 @Repository
 @RequiredArgsConstructor
 public class ArgoCDApplicationRepository {
@@ -36,7 +34,7 @@ public class ArgoCDApplicationRepository {
             new TypeReference<>() {};
 
     private final DSLContext dsl;
-    private final ObjectMapper objectMapper;
+    private final JsonbUtils jsonbUtils;
 
     /**
      * Returns all applications in the given partition enriched with project name,
@@ -85,24 +83,10 @@ public class ArgoCDApplicationRepository {
                         .project(r.get(projNameField))
                         .cluster(r.get(clusterNameField))
                         .controlPlane(r.get(cpNameField))
-                        .sources(fromJsonb(r.get(SOURCES)))
+                        .sources(Objects.requireNonNullElse(
+                                jsonbUtils.fromJsonb(r.get(SOURCES), SOURCES_TYPE), List.of()))
                         .build())
                 .toList();
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
-    private List<Map<String, Object>> fromJsonb(JSONB jsonb) {
-        if (jsonb == null || jsonb.data() == null || jsonb.data().isBlank()) {
-            return List.of();
-        }
-        try {
-            return objectMapper.readValue(jsonb.data(), SOURCES_TYPE);
-        } catch (JsonProcessingException e) {
-            log.warn("Failed to deserialize application sources JSONB '{}': {}", jsonb.data(), e.getMessage());
-            return List.of();
-        }
-    }
 }

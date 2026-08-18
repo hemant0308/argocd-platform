@@ -220,6 +220,31 @@ public class PartitionRepository {
     // -------------------------------------------------------------------------
 
     /**
+     * Resolves a partition number by its UUID.
+     * Used by {@link com.argocd.platform.api.service.PartitionService} to populate the
+     * reverse cache when a new partition UUID is seen for the first time.
+     *
+     * @return the partition_number, or empty if no partition with that id exists
+     */
+    @Transactional(readOnly = true)
+    public Optional<Integer> findPartitionNumberById(PartitionType type, UUID id) {
+        return switch (type) {
+            case CLUSTER -> dsl.select(CLUSTER_PARTITIONS.PARTITION_NUMBER)
+                    .from(CLUSTER_PARTITIONS)
+                    .where(CLUSTER_PARTITIONS.ID.eq(id))
+                    .fetchOptional(CLUSTER_PARTITIONS.PARTITION_NUMBER);
+            case PROJECT -> dsl.select(PROJECT_PARTITIONS.PARTITION_NUMBER)
+                    .from(PROJECT_PARTITIONS)
+                    .where(PROJECT_PARTITIONS.ID.eq(id))
+                    .fetchOptional(PROJECT_PARTITIONS.PARTITION_NUMBER);
+            case APPLICATION -> dsl.select(APPLICATION_PARTITIONS.PARTITION_NUMBER)
+                    .from(APPLICATION_PARTITIONS)
+                    .where(APPLICATION_PARTITIONS.ID.eq(id))
+                    .fetchOptional(APPLICATION_PARTITIONS.PARTITION_NUMBER);
+        };
+    }
+
+    /**
      * Resolves a project partition UUID by its human-readable partition number.
      * Returns empty if no partition with that number exists.
      */

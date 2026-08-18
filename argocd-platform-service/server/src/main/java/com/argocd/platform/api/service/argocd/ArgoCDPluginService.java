@@ -1,5 +1,6 @@
 package com.argocd.platform.api.service.argocd;
 
+import com.argocd.platform.api.cache.PluginExecutor;
 import com.argocd.platform.api.exception.InvalidRequestException;
 import com.argocd.platform.api.model.request.argocd.PluginGeneratorRequest;
 import com.argocd.platform.api.model.response.argocd.ApplicationItem;
@@ -9,8 +10,8 @@ import com.argocd.platform.api.model.response.argocd.ProjectItem;
 import com.argocd.platform.api.repository.ArgoCDApplicationRepository;
 import com.argocd.platform.api.repository.ClusterRepository;
 import com.argocd.platform.api.repository.ControlPlaneRepository;
-import com.argocd.platform.api.repository.PartitionRepository;
 import com.argocd.platform.api.repository.ProjectRepository;
+import com.argocd.platform.api.service.PartitionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -45,9 +46,9 @@ import java.util.stream.Collectors;
  */
 @Service
 @RequiredArgsConstructor
-public class ArgoCDPluginService {
+public class ArgoCDPluginService implements PluginExecutor {
 
-    private final PartitionRepository partitionRepository;
+    private final PartitionService partitionService;
     private final ClusterRepository clusterRepository;
     private final ProjectRepository projectRepository;
     private final ControlPlaneRepository controlPlaneRepository;
@@ -88,7 +89,7 @@ public class ArgoCDPluginService {
     // -------------------------------------------------------------------------
 
     private List<Map<String, Object>> clusterPartitions() {
-        return partitionRepository.findAllClusterPartitions().stream()
+        return partitionService.findAllClusterPartitions().stream()
                 .map(p -> {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("partitionNumber", p.getPartitionNumber());
@@ -109,7 +110,7 @@ public class ArgoCDPluginService {
 
     private List<Map<String, Object>> clusterGroups(Map<String, String> params) {
         int partitionNumber = getRequiredInt(params, "partitionNumber");
-        UUID partitionId = partitionRepository.findClusterPartitionIdByNumber(partitionNumber)
+        UUID partitionId = partitionService.findClusterPartitionIdByNumber(partitionNumber)
                 .orElseThrow(() -> new InvalidRequestException(
                         "No cluster partition found with partitionNumber: " + partitionNumber));
 
@@ -157,7 +158,7 @@ public class ArgoCDPluginService {
                 .map(cp -> cp.getName())
                 .collect(Collectors.toList());
 
-        return partitionRepository.findAllProjectPartitions().stream()
+        return partitionService.findAllProjectPartitions().stream()
                 .map(p -> {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("partitionNumber", p.getPartitionNumber());
@@ -180,7 +181,7 @@ public class ArgoCDPluginService {
 
     private List<Map<String, Object>> projectGroups(Map<String, String> params) {
         int partitionNumber = getRequiredInt(params, "partitionNumber");
-        UUID partitionId = partitionRepository.findProjectPartitionIdByNumber(partitionNumber)
+        UUID partitionId = partitionService.findProjectPartitionIdByNumber(partitionNumber)
                 .orElseThrow(() -> new InvalidRequestException(
                         "No project partition found with partitionNumber: " + partitionNumber));
 
@@ -231,7 +232,7 @@ public class ArgoCDPluginService {
     // -------------------------------------------------------------------------
 
     private List<Map<String, Object>> applicationPartitions() {
-        return partitionRepository.findAllApplicationPartitions().stream()
+        return partitionService.findAllApplicationPartitions().stream()
                 .map(p -> {
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("partitionNumber", p.getPartitionNumber());
@@ -254,7 +255,7 @@ public class ArgoCDPluginService {
 
     private List<Map<String, Object>> applicationGroups(Map<String, String> params) {
         int partitionNumber = getRequiredInt(params, "partitionNumber");
-        UUID partitionId = partitionRepository.findApplicationPartitionIdByNumber(partitionNumber)
+        UUID partitionId = partitionService.findApplicationPartitionIdByNumber(partitionNumber)
                 .orElseThrow(() -> new InvalidRequestException(
                         "No application partition found with partitionNumber: " + partitionNumber));
 

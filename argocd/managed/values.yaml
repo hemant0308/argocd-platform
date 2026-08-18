@@ -1,0 +1,86 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Plugin Generator
+# ─────────────────────────────────────────────────────────────────────────────
+plugin:
+  # ArgoCD POSTs to {baseUrl}/api/v1/getparams.execute on every reconcile.
+  # Override per environment — this default is for local Docker Desktop only.
+  baseUrl: "http://host.docker.internal:8080"
+  # Token sent as "Authorization: Bearer <token>" to the plugin service.
+  # Generate a strong value with: openssl rand -hex 32
+  token: "argocd-platform-plugin-token"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Git source — shared by all partition ApplicationSets
+# ─────────────────────────────────────────────────────────────────────────────
+git:
+  repoURL: "https://github.com/hemant0308/argocd-platform.git"
+  targetRevision: "main"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ApplicationSet poll intervals
+# Tune based on scale-test results. Lower = faster propagation, higher DB load.
+# ─────────────────────────────────────────────────────────────────────────────
+requeueAfterSeconds:
+  clusterPartitions: 30
+  projectPartitions: 30
+  applicationPartitions: 30
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Control-plane ApplicationSet
+# ─────────────────────────────────────────────────────────────────────────────
+controlPlanes:
+  argocdChartVersion: "10.3.3"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Control-plane cluster registrations
+#
+# Each entry generates one ArgoCD cluster Secret (or SealedSecret /
+# ExternalSecret) in the managed ArgoCD namespace.
+#
+# secretType: direct | sealed | external
+#
+#   direct   — plain Kubernetes Secret; credentials live in this values file.
+#              Use only for local dev. Never commit real tokens.
+#
+#   sealed   — SealedSecret (bitnami/sealed-secrets). Encrypted values are
+#              safe to commit. Generate with: kubeseal --raw ...
+#
+#   external — ExternalSecret (external-secrets.io). Credentials stay in an
+#              external store (Vault, AWS SSM, Azure KV, etc.).
+#              The chart renders the ExternalSecret; the store holds the data.
+# ─────────────────────────────────────────────────────────────────────────────
+clusters:
+  - name: cp-1
+    server: https://cp-1-control-plane:6443
+    secretType: direct
+
+    # Populate when secretType=direct
+    direct:
+      bearerToken: ""
+      tlsClientConfig:
+        insecure: false
+        caData: ""
+
+    # Populate when secretType=sealed
+    # sealed:
+    #   encryptedData:
+    #     name: "<kubeseal output>"
+    #     server: "<kubeseal output>"
+    #     config: "<kubeseal output>"
+
+    # Populate when secretType=external
+    # external:
+    #   secretStore: "my-cluster-secret-store"
+    #   secretStoreKind: ClusterSecretStore   # ClusterSecretStore | SecretStore
+    #   secretPath: "argocd/cp-1"             # key/path in the external store
+    #   refreshInterval: "1h"
+
+  - name: cp-2
+    server: https://cp-2-control-plane:6443
+    secretType: direct
+
+    direct:
+      bearerToken: ""
+      tlsClientConfig:
+        insecure: false
+        caData: ""

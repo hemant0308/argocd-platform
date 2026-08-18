@@ -1,5 +1,6 @@
 package com.argocd.platform.api.service;
 
+import com.argocd.platform.api.cache.event.PartitionChangedEvent;
 import com.argocd.platform.api.config.PartitionProperties;
 import com.argocd.platform.api.exception.InvalidRequestException;
 import com.argocd.platform.api.exception.ResourceAlreadyExistsException;
@@ -9,13 +10,13 @@ import com.argocd.platform.api.model.request.ProjectRequest;
 import com.argocd.platform.api.model.response.ProjectResponse;
 import com.argocd.platform.api.model.response.argocd.ProjectClusterItem;
 import com.argocd.platform.api.repository.ClusterRepository;
-import com.argocd.platform.api.repository.PartitionRepository;
 import com.argocd.platform.api.repository.ProjectRepository;
 import com.argocd.platform.api.util.PartitionType;
 import com.argocd.platform.api.util.ResourceStatus;
 import com.argocd.platform.db.jooq.tables.pojos.ProjectsEntity;
 import lombok.RequiredArgsConstructor;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.CollectionUtils;
@@ -36,8 +37,9 @@ public class ProjectService {
 
     private final ProjectRepository projectRepository;
     private final ClusterRepository clusterRepository;
-    private final PartitionRepository partitionRepository;
+    private final PartitionService partitionService;
     private final PartitionProperties partitionProperties;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public ProjectResponse create(ProjectRequest request) {
@@ -55,7 +57,7 @@ public class ProjectService {
         List<UUID> clusterIds = resolveClusterIds(request.getClusters());
 
         // Resolve (or create) a stable project partition
-        UUID partitionId = partitionRepository.resolvePartitionId(
+        UUID partitionId = partitionService.resolvePartitionId(
                 PartitionType.PROJECT, partitionProperties.getProjectTargetSize());
 
         UUID createdBy = request.getCreatedBy() != null
@@ -74,6 +76,8 @@ public class ProjectService {
         if (!clusterIds.isEmpty()) {
             projectRepository.saveProjectClusters(saved.getId(), clusterIds);
         }
+
+        eventPublisher.publishEvent(new PartitionChangedEvent(this, partitionId, PartitionType.PROJECT));
 
         List<ProjectClusterItem> clusters = projectRepository
                 .findClustersForProjects(List.of(saved.getId()))
@@ -100,6 +104,9 @@ public class ProjectService {
             projectRepository.deleteProjectClusters(id);
             projectRepository.saveProjectClusters(id, clusterIds);
         }
+
+        eventPublisher.publishEvent(
+                new PartitionChangedEvent(this, existing.getProjectPartitionId(), PartitionType.PROJECT));
 
         List<ProjectClusterItem> clusters = projectRepository
                 .findClustersForProjects(List.of(id))
@@ -158,9 +165,11 @@ public class ProjectService {
      */
     @Transactional
     public void delete(UUID id) {
-        projectRepository.findById(id)
+        ProjectsEntity existing = projectRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Project not found: " + id));
+        UUID partitionId = existing.getProjectPartitionId();
         projectRepository.deleteById(id);
+        eventPublisher.publishEvent(new PartitionChangedEvent(this, partitionId, PartitionType.PROJECT));
     }
 
     private ProjectResponse toResponse(ProjectsEntity e, List<ProjectClusterItem> clusters) {

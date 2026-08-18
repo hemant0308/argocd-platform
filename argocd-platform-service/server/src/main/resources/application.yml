@@ -44,6 +44,21 @@ spring:
   jooq:
     sql-dialect: POSTGRES
 
+  # ----------------------------------------------------------------
+  # Redis — distributed cache used by PluginCacheService when
+  # argocd.platform.cache.enabled=true.  The Redis health indicator
+  # is gated on the same CACHE_ENABLED flag so local dev stays GREEN
+  # when Redis is absent and caching is off.
+  # ----------------------------------------------------------------
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      ssl:
+        enabled: ${REDIS_SSL:false}
+      timeout: ${REDIS_TIMEOUT:2000ms}
+
   jackson:
     time-zone: UTC
     serialization:
@@ -68,6 +83,8 @@ management:
   health:
     defaults:
       enabled: true
+    redis:
+      enabled: ${CACHE_ENABLED:false}
 
 # ----------------------------------------------------------------
 # OpenAPI / Swagger UI
@@ -100,6 +117,15 @@ argocd:
     project-target-size: ${PARTITION_PROJECT_SIZE:100}
     cluster-target-size: ${PARTITION_CLUSTER_SIZE:100}
     application-target-size: ${PARTITION_APPLICATION_SIZE:100}
+  platform:
+    cache:
+      # Set CACHE_ENABLED=true to activate Redis-backed plugin generator caching.
+      # When false the PluginCacheService and all cache listeners are not created,
+      # and the Redis health indicator is disabled so local dev stays GREEN.
+      enabled: ${CACHE_ENABLED:false}
+      # Safety-net TTL.  ArgoCD reconciles periodically so stale entries older
+      # than ttl-minutes are evicted automatically even without an explicit event.
+      ttl-minutes: ${CACHE_TTL_MINUTES:5}
 
 # ----------------------------------------------------------------
 # Logging

@@ -10,8 +10,10 @@ spec:
     repoURL: https://github.com/hemant0308/argocd-platform.git
     targetRevision: main
     path: argocd/managed
-    directory:
-      recurse: true
+    helm:
+      # Default values are committed at argocd/managed/values.yaml.
+      # Override per environment by passing valuesObject or additional valueFiles here,
+      # or by layering a gitignored values-local.yaml via the ArgoCD Application spec.
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd

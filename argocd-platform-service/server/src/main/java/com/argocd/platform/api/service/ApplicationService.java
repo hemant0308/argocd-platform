@@ -1,5 +1,6 @@
 package com.argocd.platform.api.service;
 
+import com.argocd.platform.api.cache.event.PartitionChangedEvent;
 import com.argocd.platform.api.config.PartitionProperties;
 import com.argocd.platform.api.exception.InvalidRequestException;
 import com.argocd.platform.api.exception.ResourceNotFoundException;
@@ -7,13 +8,14 @@ import com.argocd.platform.api.model.request.ApplicationRequest;
 import com.argocd.platform.api.model.response.ApplicationResponse;
 import com.argocd.platform.api.repository.ApplicationRepository;
 import com.argocd.platform.api.repository.ClusterRepository;
-import com.argocd.platform.api.repository.PartitionRepository;
 import com.argocd.platform.api.repository.ProjectRepository;
+import com.argocd.platform.api.util.JsonbUtils;
 import com.argocd.platform.api.util.PartitionType;
 import com.argocd.platform.api.util.ResourceStatus;
 import com.argocd.platform.db.jooq.tables.pojos.ApplicationsEntity;
 import lombok.RequiredArgsConstructor;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,8 +35,10 @@ public class ApplicationService {
     private final ApplicationRepository applicationRepository;
     private final ProjectRepository projectRepository;
     private final ClusterRepository clusterRepository;
-    private final PartitionRepository partitionRepository;
+    private final PartitionService partitionService;
     private final PartitionProperties partitionProperties;
+    private final JsonbUtils jsonbUtils;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
     public ApplicationResponse create(ApplicationRequest request) {
@@ -54,7 +58,7 @@ public class ApplicationService {
         String finalName = request.getName() + "-" + randomSuffix();
 
         // Resolve (or create) a stable application partition
-        UUID partitionId = partitionRepository.resolvePartitionId(
+        UUID partitionId = partitionService.resolvePartitionId(
                 PartitionType.APPLICATION, partitionProperties.getApplicationTargetSize());
 
         ApplicationsEntity entity = new ApplicationsEntity()
@@ -66,6 +70,8 @@ public class ApplicationService {
                 .setGeneration(0L);
 
         ApplicationsEntity saved = applicationRepository.save(entity, request.getSources());
+        eventPublisher.publishEvent(
+                new PartitionChangedEvent(this, partitionId, PartitionType.APPLICATION));
         return toResponse(saved, request.getSources());
     }
 
@@ -88,6 +94,8 @@ public class ApplicationService {
                 .setGeneration(existing.getGeneration() + 1L);
 
         ApplicationsEntity updated = applicationRepository.update(id, existing, request.getSources());
+        eventPublisher.publishEvent(
+                new PartitionChangedEvent(this, existing.getApplicationPartitionId(), PartitionType.APPLICATION));
         return toResponse(updated, request.getSources());
     }
 
@@ -104,7 +112,7 @@ public class ApplicationService {
         Map<UUID, JSONB> sourcesMap = applicationRepository.findAllSourcesMap();
         return entities.stream()
                 .map(e -> toResponse(e,
-                        applicationRepository.fromJsonb(sourcesMap.get(e.getId()), SOURCES_TYPE)))
+                        jsonbUtils.fromJsonb(sourcesMap.get(e.getId()), SOURCES_TYPE)))
                 .collect(Collectors.toList());
     }
 
@@ -113,10 +121,13 @@ public class ApplicationService {
      */
     @Transactional
     public void delete(UUID id) {
-        applicationRepository.findById(id)
+        ApplicationsEntity existing = applicationRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Application not found: " + id));
+        UUID partitionId = existing.getApplicationPartitionId();
         applicationRepository.deleteById(id);
+        eventPublisher.publishEvent(
+                new PartitionChangedEvent(this, partitionId, PartitionType.APPLICATION));
     }
 
     // -------------------------------------------------------------------------

@@ -1,0 +1,5 @@
+apiVersion: v2
+name: managed-argocd
+description: Platform resources deployed on the Managed ArgoCD instance — plugin config, partition ApplicationSets, and control-plane cluster registrations.
+type: application
+version: 0.1.0

@@ -10,12 +10,14 @@ data:
   #
   # Set input.parameters.resource in each ApplicationSet generator block
   # to select the data source:
-  #   cluster-partitions  — list all cluster partitions
-  #   cluster-groups      — clusters in a partition grouped by control plane (requires partitionNumber)
-  #   project-partitions  — list all project partitions with control planes
-  #   projects            — projects in a partition (requires partitionNumber)
-  baseUrl: "http://host.docker.internal:8080"
+  #   cluster-partitions      — list all cluster partitions
+  #   cluster-groups          — clusters in a partition grouped by control plane (requires partitionNumber)
+  #   project-partitions      — list all project partitions with control planes
+  #   project-groups          — projects in a partition (requires partitionNumber)
+  #   application-partitions  — list all application partitions
+  #   application-groups      — applications in a partition (requires partitionNumber)
+  baseUrl: {{ .Values.plugin.baseUrl | quote }}
   # ArgoCD sends this value as "Authorization: Bearer <token>" on every plugin call.
-  # The plugin service does not validate it (internal cluster traffic only).
+  # The plugin service validates it against the shared secret.
   # Use the $secret-name:key syntax to pull the value from a Kubernetes Secret.
   token: "$argocd-platform-plugin-secret:token"

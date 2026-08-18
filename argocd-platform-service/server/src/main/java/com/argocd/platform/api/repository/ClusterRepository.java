@@ -1,11 +1,9 @@
 package com.argocd.platform.api.repository;
 
 import com.argocd.platform.api.model.response.argocd.ClusterItem;
+import com.argocd.platform.api.util.JsonbUtils;
 import com.argocd.platform.db.jooq.tables.pojos.ClustersEntity;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.extern.slf4j.Slf4j;
 import org.jooq.DSLContext;
 import org.jooq.Field;
 import org.jooq.JSONB;
@@ -21,7 +19,6 @@ import java.util.UUID;
 import static com.argocd.platform.db.jooq.Tables.CLUSTERS;
 import static com.argocd.platform.db.jooq.Tables.CONTROL_PLANES;
 
-@Slf4j
 @Repository
 public class ClusterRepository {
 
@@ -29,11 +26,11 @@ public class ClusterRepository {
             new TypeReference<>() {};
 
     private final DSLContext dsl;
-    private final ObjectMapper objectMapper;
+    private final JsonbUtils jsonbUtils;
 
-    public ClusterRepository(DSLContext dsl, ObjectMapper objectMapper) {
+    public ClusterRepository(DSLContext dsl, JsonbUtils jsonbUtils) {
         this.dsl = dsl;
-        this.objectMapper = objectMapper;
+        this.jsonbUtils = jsonbUtils;
     }
 
     /**
@@ -126,30 +123,8 @@ public class ClusterRepository {
                         .name(r.get(CLUSTERS.NAME))
                         .server(r.get(CLUSTERS.SERVER))
                         .controlPlane(r.get(cpNameField))
-                        .config(fromJsonb(r.get(CLUSTERS.AUTH)))
+                        .config(jsonbUtils.fromJsonb(r.get(CLUSTERS.AUTH), AUTH_TYPE))
                         .build());
     }
 
-    // -------------------------------------------------------------------------
-    // Helpers
-    // -------------------------------------------------------------------------
-
-    public JSONB toJsonb(Object value) {
-        if (value == null) return null;
-        try {
-            return JSONB.jsonb(objectMapper.writeValueAsString(value));
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to serialize to JSONB: " + e.getMessage(), e);
-        }
-    }
-
-    private Map<String, Object> fromJsonb(JSONB jsonb) {
-        if (jsonb == null || jsonb.data() == null || jsonb.data().isBlank()) return null;
-        try {
-            return objectMapper.readValue(jsonb.data(), AUTH_TYPE);
-        } catch (JsonProcessingException e) {
-            log.warn("Failed to deserialize auth JSONB '{}': {}", jsonb.data(), e.getMessage());
-            return null;
-        }
-    }
 }

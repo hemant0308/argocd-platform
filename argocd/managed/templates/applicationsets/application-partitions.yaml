@@ -1,7 +1,7 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: project-partitions
+  name: application-partitions
   namespace: argocd
 
 spec:
@@ -11,31 +11,31 @@ spec:
           name: argocd-platform-plugin
         input:
           parameters:
-            resource: "project-partitions"
-        requeueAfterSeconds: 1
+            resource: "application-partitions"
+        requeueAfterSeconds: {{ .Values.requeueAfterSeconds.applicationPartitions }}
 
   template:
     metadata:
-      name: 'project-partition-{{partitionNumber}}'
+      name: 'application-partition-{{`{{partitionNumber}}`}}'
       annotations:
-        argocd-platform/generation: '{{generation}}'
-        argocd-platform/project-count: '{{projectCount}}'
+        argocd-platform/generation: '{{`{{generation}}`}}'
+        argocd-platform/application-count: '{{`{{applicationCount}}`}}'
 
     spec:
       project: default
 
       source:
-        repoURL: https://github.com/hemant0308/argocd-platform.git
-        targetRevision: main
-        path: charts/project-partition
+        repoURL: {{ .Values.git.repoURL | quote }}
+        targetRevision: {{ .Values.git.targetRevision | quote }}
+        path: charts/application-partition
         helm:
           valuesObject:
             # Partition identity — passed through to the inner ApplicationSet
-            # so the project-groups plugin knows which partition to query.
-            partitionNumber: '{{partitionNumber}}'
+            # so the application-groups plugin knows which partition to query.
+            partitionNumber: '{{`{{partitionNumber}}`}}'
             # Generation bumps whenever partition membership changes in the DB,
             # forcing this Application to re-sync and re-render the inner AppSet.
-            generation: '{{generation}}'
+            generation: '{{`{{generation}}`}}'
 
       # Deploy to the managed ArgoCD cluster itself — the chart renders an
       # ApplicationSet resource that lives on the managed control plane.

@@ -2,13 +2,11 @@ package com.argocd.platform.api.repository;
 
 import com.argocd.platform.api.model.response.argocd.ProjectClusterItem;
 import com.argocd.platform.api.model.response.argocd.ProjectItem;
+import com.argocd.platform.api.util.JsonbUtils;
 import com.argocd.platform.api.util.ResourceStatus;
 import com.argocd.platform.db.jooq.tables.pojos.ProjectsEntity;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.jooq.DSLContext;
 import org.jooq.JSONB;
 import org.jooq.impl.DSL;
@@ -16,6 +14,7 @@ import org.springframework.stereotype.Repository;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -24,13 +23,12 @@ import static com.argocd.platform.db.jooq.Tables.CLUSTERS;
 import static com.argocd.platform.db.jooq.Tables.PROJECT_CLUSTERS;
 import static com.argocd.platform.db.jooq.Tables.PROJECTS;
 
-@Slf4j
 @Repository
 @RequiredArgsConstructor
 public class ProjectRepository {
 
     private final DSLContext dsl;
-    private final ObjectMapper objectMapper;
+    private final JsonbUtils jsonbUtils;
 
     /**
      * Inserts a new project. The {@code projectPartitionId} must be set on the entity
@@ -153,7 +151,8 @@ public class ProjectRepository {
                         Collectors.mapping(
                                 row -> ProjectClusterItem.builder()
                                         .name(row.clusterName())
-                                        .namespaces(parseNamespaces(row.namespaces()))
+                                        .namespaces(Objects.requireNonNullElse(
+                                                jsonbUtils.fromJsonb(row.namespaces(), STRING_LIST), List.of()))
                                         .build(),
                                 Collectors.toList())));
     }
@@ -218,7 +217,8 @@ public class ProjectRepository {
                         Collectors.mapping(
                                 row -> ProjectClusterItem.builder()
                                         .name(row.clusterName())
-                                        .namespaces(parseNamespaces(row.namespaces()))
+                                        .namespaces(Objects.requireNonNullElse(
+                                                jsonbUtils.fromJsonb(row.namespaces(), STRING_LIST), List.of()))
                                         .build(),
                                 Collectors.toList())));
 
@@ -236,16 +236,4 @@ public class ProjectRepository {
     // -------------------------------------------------------------------------
 
     private static final TypeReference<List<String>> STRING_LIST = new TypeReference<>() {};
-
-    private List<String> parseNamespaces(JSONB jsonb) {
-        if (jsonb == null || jsonb.data() == null || jsonb.data().isBlank()) {
-            return List.of();
-        }
-        try {
-            return objectMapper.readValue(jsonb.data(), STRING_LIST);
-        } catch (JsonProcessingException e) {
-            log.warn("Failed to deserialize namespaces JSONB '{}': {}", jsonb.data(), e.getMessage());
-            return List.of();
-        }
-    }
 }

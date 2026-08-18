@@ -1,8 +1,8 @@
 package com.argocd.platform.api.controller.argocd;
 
+import com.argocd.platform.api.cache.PluginExecutor;
 import com.argocd.platform.api.model.request.argocd.PluginGeneratorRequest;
 import com.argocd.platform.api.model.response.argocd.PluginGeneratorResponse;
-import com.argocd.platform.api.service.argocd.ArgoCDPluginService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -37,7 +37,7 @@ import org.springframework.web.bind.annotation.RestController;
         description = "Single ApplicationSet Plugin Generator endpoint; dispatches by resource parameter")
 public class ArgoCDPluginController {
 
-    private final ArgoCDPluginService pluginService;
+    private final PluginExecutor pluginService;
 
     @PostMapping("/getparams.execute")
     @Operation(

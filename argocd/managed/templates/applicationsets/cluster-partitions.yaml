@@ -12,31 +12,30 @@ spec:
         input:
           parameters:
             resource: "cluster-partitions"
-        requeueAfterSeconds: 1
+        requeueAfterSeconds: {{ .Values.requeueAfterSeconds.clusterPartitions }}
 
   template:
     metadata:
-      name: 'cluster-partition-{{partitionNumber}}'
+      name: 'cluster-partition-{{`{{partitionNumber}}`}}'
       annotations:
-        argocd-platform/generation: '{{generation}}'
-        argocd-platform/cluster-count: '{{clusterCount}}'
+        argocd-platform/generation: '{{`{{generation}}`}}'
+        argocd-platform/cluster-count: '{{`{{clusterCount}}`}}'
 
     spec:
       project: default
 
       source:
-        repoURL: https://github.com/hemant0308/argocd-platform.git
-        targetRevision: main
+        repoURL: {{ .Values.git.repoURL | quote }}
+        targetRevision: {{ .Values.git.targetRevision | quote }}
         path: charts/cluster-partition
         helm:
           valuesObject:
             # Partition identity — passed through to the inner ApplicationSet
             # so the cluster-groups plugin knows which partition to query.
-            partitionNumber: '{{partitionNumber}}'
-            # Generation is included as a Helm value so that any change in
-            # partition membership (which bumps generation in the DB) causes
-            # this Application to re-sync and re-render the inner ApplicationSet.
-            generation: '{{generation}}'
+            partitionNumber: '{{`{{partitionNumber}}`}}'
+            # Generation bumps whenever partition membership changes in the DB,
+            # forcing this Application to re-sync and re-render the inner AppSet.
+            generation: '{{`{{generation}}`}}'
 
       # Deploy to the managed ArgoCD cluster itself — the chart renders an
       # ApplicationSet resource that lives on the managed control plane.

@@ -1,6 +1,7 @@
 package com.argocd.platform.api.service;
 
 import com.argocd.platform.api.assignment.ControlPlaneResolver;
+import com.argocd.platform.api.cache.event.PartitionChangedEvent;
 import com.argocd.platform.api.config.PartitionProperties;
 import com.argocd.platform.api.exception.InvalidRequestException;
 import com.argocd.platform.api.exception.ResourceAlreadyExistsException;
@@ -10,16 +11,13 @@ import com.argocd.platform.api.model.request.ClusterRequest;
 import com.argocd.platform.api.model.response.ClusterResponse;
 import com.argocd.platform.api.repository.ClusterRepository;
 import com.argocd.platform.api.repository.ControlPlaneRepository;
-import com.argocd.platform.api.repository.PartitionRepository;
-import com.argocd.platform.db.jooq.tables.pojos.ControlPlanesEntity;
+import com.argocd.platform.api.util.JsonbUtils;
 import com.argocd.platform.api.util.PartitionType;
 import com.argocd.platform.api.util.ResourceStatus;
+import com.argocd.platform.db.jooq.tables.pojos.ControlPlanesEntity;
 import com.argocd.platform.db.jooq.tables.pojos.ClustersEntity;
-import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.extern.slf4j.Slf4j;
-import org.jooq.JSONB;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -28,15 +26,15 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-@Slf4j
 @Service
 public class ClusterService {
 
     private final ClusterRepository clusterRepository;
     private final ControlPlaneRepository controlPlaneRepository;
-    private final PartitionRepository partitionRepository;
+    private final PartitionService partitionService;
     private final PartitionProperties partitionProperties;
-    private final ObjectMapper objectMapper;
+    private final JsonbUtils jsonbUtils;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * Strategy map built once at startup from all {@link ControlPlaneResolver} beans.
@@ -47,15 +45,17 @@ public class ClusterService {
     public ClusterService(
             ClusterRepository clusterRepository,
             ControlPlaneRepository controlPlaneRepository,
-            PartitionRepository partitionRepository,
+            PartitionService partitionService,
             PartitionProperties partitionProperties,
-            ObjectMapper objectMapper,
+            JsonbUtils jsonbUtils,
+            ApplicationEventPublisher eventPublisher,
             List<ControlPlaneResolver> resolvers) {
         this.clusterRepository = clusterRepository;
         this.controlPlaneRepository = controlPlaneRepository;
-        this.partitionRepository = partitionRepository;
+        this.partitionService = partitionService;
         this.partitionProperties = partitionProperties;
-        this.objectMapper = objectMapper;
+        this.jsonbUtils = jsonbUtils;
+        this.eventPublisher = eventPublisher;
         this.resolverMap = resolvers.stream()
                 .collect(Collectors.toUnmodifiableMap(
                         ControlPlaneResolver::supportedAlgorithm,
@@ -77,7 +77,7 @@ public class ClusterService {
         // Always resolve control plane on create — reassignControlPlane is update-only
         UUID controlPlaneId = resolveControlPlaneId(request);
 
-        UUID partitionId = partitionRepository.resolvePartitionId(
+        UUID partitionId = partitionService.resolvePartitionId(
                 PartitionType.CLUSTER, partitionProperties.getClusterTargetSize());
 
         ClustersEntity entity = new ClustersEntity()
@@ -86,11 +86,12 @@ public class ClusterService {
                 .setControlPlaneId(controlPlaneId)
                 .setClusterPartitionId(partitionId)
                 .setStatus(ResourceStatus.UNKNOWN.name())
-                .setNamespaces(toJsonb(request.getNamespaces()))
-                .setLabels(toJsonb(request.getLabels()))
-                .setAuth(toJsonb(request.getAuth()));
+                .setNamespaces(jsonbUtils.toJsonb(request.getNamespaces()))
+                .setLabels(jsonbUtils.toJsonb(request.getLabels()))
+                .setAuth(jsonbUtils.toJsonb(request.getAuth()));
 
         ClustersEntity saved = clusterRepository.save(entity);
+        eventPublisher.publishEvent(new PartitionChangedEvent(this, partitionId, PartitionType.CLUSTER));
         return toResponse(saved, fetchControlPlaneName(controlPlaneId));
     }
 
@@ -108,11 +109,13 @@ public class ClusterService {
         // Partition assignment and name are never changed via the API
         existing.setServer(request.getServer())
                 .setControlPlaneId(controlPlaneId)
-                .setNamespaces(toJsonb(request.getNamespaces()))
-                .setLabels(toJsonb(request.getLabels()))
-                .setAuth(toJsonb(request.getAuth()));
+                .setNamespaces(jsonbUtils.toJsonb(request.getNamespaces()))
+                .setLabels(jsonbUtils.toJsonb(request.getLabels()))
+                .setAuth(jsonbUtils.toJsonb(request.getAuth()));
 
         ClustersEntity updated = clusterRepository.update(id, existing);
+        eventPublisher.publishEvent(
+                new PartitionChangedEvent(this, existing.getClusterPartitionId(), PartitionType.CLUSTER));
         return toResponse(updated, fetchControlPlaneName(controlPlaneId));
     }
 
@@ -138,9 +141,11 @@ public class ClusterService {
      */
     @Transactional
     public void delete(UUID id) {
-        clusterRepository.findById(id)
+        ClustersEntity existing = clusterRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Cluster not found: " + id));
+        UUID partitionId = existing.getClusterPartitionId();
         clusterRepository.deleteById(id);
+        eventPublisher.publishEvent(new PartitionChangedEvent(this, partitionId, PartitionType.CLUSTER));
     }
 
     // -------------------------------------------------------------------------
@@ -204,9 +209,9 @@ public class ClusterService {
                 .status(e.getStatus())
                 .controlPlaneId(e.getControlPlaneId())
                 .controlPlaneName(controlPlaneName)
-                .namespaces(fromJsonb(e.getNamespaces(), new TypeReference<List<String>>() {}))
-                .labels(fromJsonb(e.getLabels(), new TypeReference<Map<String, String>>() {}))
-                .auth(fromJsonb(e.getAuth(), new TypeReference<Map<String, Object>>() {}))
+                .namespaces(jsonbUtils.fromJsonb(e.getNamespaces(), new TypeReference<List<String>>() {}))
+                .labels(jsonbUtils.fromJsonb(e.getLabels(), new TypeReference<Map<String, String>>() {}))
+                .auth(jsonbUtils.fromJsonb(e.getAuth(), new TypeReference<Map<String, Object>>() {}))
                 .createdAt(e.getCreatedAt())
                 .updatedAt(e.getUpdatedAt())
                 .build();
@@ -218,38 +223,4 @@ public class ClusterService {
                 .orElse(null);
     }
 
-    /**
-     * Serializes an arbitrary object to a jOOQ {@link JSONB} value.
-     * Returns {@code null} when {@code value} is {@code null}.
-     *
-     * @throws IllegalStateException if Jackson serialization fails (should never happen
-     *                               for {@code List<String>} or {@code Map<String,String>})
-     */
-    private JSONB toJsonb(Object value) {
-        if (value == null) {
-            return null;
-        }
-        try {
-            return JSONB.jsonb(objectMapper.writeValueAsString(value));
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to serialize value to JSONB: " + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * Deserializes a jOOQ {@link JSONB} column value into the target type.
-     * Returns {@code null} when {@code jsonb} is {@code null} or its data is blank.
-     * Logs a warning and returns {@code null} if the stored JSON cannot be parsed.
-     */
-    private <T> T fromJsonb(JSONB jsonb, TypeReference<T> typeRef) {
-        if (jsonb == null || jsonb.data() == null || jsonb.data().isBlank()) {
-            return null;
-        }
-        try {
-            return objectMapper.readValue(jsonb.data(), typeRef);
-        } catch (JsonProcessingException e) {
-            log.warn("Failed to deserialize JSONB column value '{}': {}", jsonb.data(), e.getMessage());
-            return null;
-        }
-    }
 }
