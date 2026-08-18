@@ -1842,3 +1842,174 @@ An application's target cluster must be a member of the application's project (`
 ## Application cluster update
 
 On update, an application's `cluster_id` may be changed, but only to a cluster that is already assigned to the same project.
+
+---
+
+# 32. TODO / Future Enhancements
+
+This section tracks known gaps and deferred work items. Implementation details are planned separately per item.
+
+---
+
+## 32.1 Identity and Authentication
+
+### Multi-source external identity providers
+The platform has no authentication layer. Users are identified by UUID only.
+
+**Needed:** Support pluggable external identity providers — LDAP, Azure AD, Google OAuth, GitHub OAuth. Multiple providers must be usable simultaneously so different teams can authenticate via different corporate directories.
+
+### Project authorization via AD groups
+Project membership is currently individual user-to-project only. This does not scale for teams managed via Active Directory or LDAP groups.
+
+**Needed:** Projects must be authorizable via AD/LDAP groups in addition to individual users. A user is authorized for a project if they are a direct member or if any of their group memberships grants access.
+
+---
+
+## 32.2 User and Resource Management APIs
+
+### User management API
+The `users` table exists but no API is exposed to manage it.
+
+**Needed:** Full CRUD API for users — create, list, update, deactivate.
+
+### Resource status lifecycle
+Resource `status` fields (`UNKNOWN`, `ACTIVE`, `ERROR`) are never updated after creation. They do not reflect actual ArgoCD state.
+
+**Needed:** Resource status must be driven by live ArgoCD sync and health state. When an application syncs successfully, a cluster connects, or a project is created in ArgoCD, the corresponding platform record's `status` must be updated automatically. See §32.11.
+
+---
+
+## 32.3 ApplicationSet Behaviour
+
+### Configurable poll interval per resource type
+All ApplicationSets share a single hardcoded poll interval. Different resource types change at very different frequencies.
+
+**Needed:** The reconciliation poll interval (`requeueAfterSeconds`) must be independently configurable per resource type — control-planes, cluster-partitions, project-partitions, application-partitions — without code changes.
+
+### Safe pruning policy for the control-plane ApplicationSet
+Automatic pruning on the control-plane ApplicationSet would cascade ArgoCD removal to all child workloads on user clusters — a catastrophic blast radius.
+
+**Needed:** The control-plane ApplicationSet must not auto-prune. Removing a control plane from the registry must require a deliberate two-step operation (drain then remove), not an automatic response to a Plugin Generator response change. A decommissioning runbook must be defined.
+
+### On-demand reconciliation API
+A desired-state change currently takes up to one full poll cycle to propagate. There is no way to force reconciliation of a specific partition or resource.
+
+**Needed:** An API on the platform service to trigger immediate reconciliation of a specific partition or resource without waiting for the next poll cycle. The platform service owns the ArgoCD connection; the caller does not interact with ArgoCD directly.
+
+### Event-driven reconciliation
+The platform service should not rely on ArgoCD polling as the primary mechanism for propagating state changes.
+
+**Needed:** After any state-mutating write (application registered, cluster reassigned, etc.), the platform service must automatically trigger a reconciliation of only the affected partition — not wait for the next poll cycle. The platform service must be connected to Managed ArgoCD for this purpose. Polling remains as a fallback safety net only.
+
+---
+
+## 32.4 Partition Lifecycle
+
+### Empty partition cleanup
+When all resources leave a partition, the partition row remains indefinitely with zero members.
+
+**Needed:** Empty partitions must be automatically reclaimed after a configurable inactivity period. Cleanup must not trigger rebalancing of resources in other partitions.
+
+---
+
+## 32.5 Management UI
+
+### UI is not production-ready
+The current UI is a prototype with no authentication, no pagination, and limited error handling.
+
+**Needed before production use:**
+- Authentication via SSO / OAuth
+- Pagination for large resource lists
+- Cluster-to-project assignment flow
+- Live application status and health driven by ArgoCD state
+- Audit log and history view per resource
+
+---
+
+## 32.6 Observability and Operations
+
+### Custom metrics
+The service has no platform-level metrics beyond standard health endpoints.
+
+**Needed:** Metrics covering partition fill rates, application and cluster counts per control plane, Plugin Generator request latency, and desired-state churn rate.
+
+### Control-plane failover runbook
+There is no documented procedure for executing a failover safely under incident conditions.
+
+**Needed:** A runbook covering how to drain a control plane, reassign its clusters, validate ApplicationSet reconciliation, and confirm application health on the new control plane. This is superseded by §32.10 once the failover API is available, but a manual runbook is required in the interim.
+
+---
+
+## 32.7 Cluster Authentication
+
+### Typed and validated auth mechanisms
+The cluster auth field accepts any shape without validation. Different cluster types require different authentication mechanisms (bearer token, TLS client certificate, AWS EKS exec credential, GKE Workload Identity, in-cluster).
+
+**Needed:** Cluster registration must accept a typed auth mechanism field and validate that the provided credentials match the expected shape for that type. Malformed credentials must be rejected at registration time, not silently passed through to ArgoCD.
+
+---
+
+## 32.8 External Secrets Management
+
+### Credentials stored in the database
+Cluster credentials (API server tokens, TLS keys) and any ArgoCD API tokens are currently stored directly in PostgreSQL. This creates backup exposure, rotation complexity, and policy violations.
+
+**Needed:** Sensitive credentials must not be stored at rest in the database. The platform must integrate with an external secrets backend. Credentials must be rotatable without a platform API call or database update.
+
+---
+
+## 32.9 Partition-Level Response Caching
+
+### Plugin Generator responses re-queried on every poll cycle
+At steady state, most Plugin Generator calls return unchanged data. At scale this creates unnecessary database load across thousands of partitions.
+
+**Needed:** Plugin Generator responses must be cached at the partition level. The cache must be invalidated explicitly whenever partition state changes — application registered or deleted, cluster reassigned, cluster failover, project cluster assignment changed. Stale data must not be served; a TTL is a safety net only, not the primary consistency mechanism. Caching must complement event-driven reconciliation (§32.3): a write invalidates the cache, ArgoCD is refreshed, and the next Plugin Generator call gets fresh data from the database and repopulates the cache.
+
+---
+
+## 32.10 Controlled Failover API
+
+### No API for failover — only raw database updates
+Failover today requires direct database writes with no progress tracking, no safety checks, and no atomicity guarantee across large cluster sets.
+
+**Needed:** A single API that encapsulates the complete failover operation with the following capabilities:
+
+- **Full control-plane failover** — move all clusters off a control plane to a target control plane.
+- **Partial failover** — move a specific subset of clusters, selected by cluster name or by label filters.
+- **Stepping** — move all clusters at once (single switch) or in configurable batches. In batched mode, the API waits for each batch to reconcile successfully in ArgoCD before starting the next batch.
+- **Dry run** — return the planned cluster list and batch schedule without making any changes.
+- **Async with progress tracking** — the API returns immediately with an operation ID; callers poll for progress, batch completion, and any paused or failed state.
+- **Cancel** — stop after the current batch completes without rolling back already-moved clusters.
+
+---
+
+## 32.11 ArgoCD Notification Integration
+
+### ArgoCD state changes are not reflected in the platform database
+
+Resource status in the platform database is never updated after creation. Users have no way to receive notifications when their applications deploy, clusters connect, or projects are provisioned.
+
+**Needed — two capabilities:**
+
+**1. Inbound: ArgoCD → Platform status updates**
+
+The platform must receive state change events from ArgoCD and update the corresponding resource `status` in the database. The following events must be handled:
+
+| Event | Trigger |
+|---|---|
+| Application synced | ArgoCD sync succeeded |
+| Application deployed | ArgoCD sync succeeded and health is Healthy |
+| Application degraded | ArgoCD health degraded |
+| Application sync failed | ArgoCD sync failed |
+| Cluster connected | Cluster successfully connects to its control plane |
+| Cluster disconnected | Cluster becomes unreachable from its control plane |
+| Project created | AppProject successfully created in ArgoCD |
+| Project updated | AppProject updated in ArgoCD |
+
+**2. Outbound: User notifications delegated to ArgoCD's notification system**
+
+User-facing notifications (webhooks, Slack, email, PagerDuty, etc.) are handled natively by the ArgoCD notifications controller running on each control plane — not by the platform service. The platform service must not duplicate this responsibility.
+
+The `application-registration` Helm chart must be updated to accept notification subscription configuration as values and render the corresponding ArgoCD notification annotations on the generated Application resource. This allows users to declare their notification preferences as part of application registration, and ArgoCD delivers the notifications directly.
+
+The Helm chart must support any notification channel and trigger combination that ArgoCD supports — the chart should not restrict or enumerate specific channels. The set of available notification channels and templates is an ArgoCD configuration concern on each control plane, not a platform service concern.
