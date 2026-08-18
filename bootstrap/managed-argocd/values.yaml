@@ -30,7 +30,7 @@ notifications:
 
   notifiers:
     service.webhook.platform-status: |
-      url: http://argocd-platform-service:8080
+      url: "http://host.docker.internal:8080"
       headers:
         - name: Authorization
           value: Bearer $platform-notification-token
