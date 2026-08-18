@@ -40,6 +40,13 @@ spec:
   template:
     metadata:
       name: 'cluster-partition-{{ .Values.partitionNumber }}-{{ "{{ .controlPlane }}" }}'
+      labels:
+        argocd-platform/resource-type: cluster
+        argocd-platform/partition-number: "{{ .Values.partitionNumber }}"
+        argocd-platform/control-plane: '{{ "{{ .controlPlane }}" }}'
+      annotations:
+        notifications.argoproj.io/subscribe.on-cluster-partition-synced.platform-status: ""
+        notifications.argoproj.io/subscribe.on-cluster-partition-failed.platform-status: ""
 
     spec:
       project: default

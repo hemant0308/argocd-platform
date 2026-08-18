@@ -13,14 +13,7 @@ CLUSTER_CONTAINER="${CLUSTER_NAME}-control-plane"
 
 SERVICE_ACCOUNT="argocd-manager"
 SERVICE_ACCOUNT_NAMESPACE="kube-system"
-
-# Repository-relative paths
-CLUSTER_MANIFEST_DIR="argocd/managed/clusters"
-CLUSTER_MANIFEST="${CLUSTER_MANIFEST_DIR}/${CLUSTER_NAME}.yaml"
-
-VALUES_DIR="control-planes/values"
-CLUSTER_VALUES_DIR="${VALUES_DIR}/${CLUSTER_NAME}"
-CLUSTER_VALUES_FILE="${CLUSTER_VALUES_DIR}/default.yaml"
+TOKEN_SECRET="${SERVICE_ACCOUNT}-token"
 
 CLUSTER_SERVER="https://${CLUSTER_CONTAINER}:6443"
 
@@ -45,9 +38,7 @@ if kind get clusters | grep -qx "${CLUSTER_NAME}"; then
     echo "Cluster ${CLUSTER_NAME} already exists."
 else
     echo "Creating Kind cluster..."
-
-    kind create cluster \
-        --name "${CLUSTER_NAME}"
+    kind create cluster --name "${CLUSTER_NAME}"
 fi
 
 # ------------------------------------------------------------
@@ -85,12 +76,26 @@ echo "Cluster IP        : ${CLUSTER_IP}"
 echo "Cluster server    : ${CLUSTER_SERVER}"
 
 # ------------------------------------------------------------
-# 4. Create ServiceAccount
+# 4. Create ServiceAccount, ClusterRoleBinding, and token Secret
+#    Skipped if the token Secret already exists — prints
+#    the existing token and CA instead.
 # ------------------------------------------------------------
 
-log "Creating ServiceAccount"
+SECRET_EXISTS="$(
+    kubectl --context "${CONTROL_PLANE_CONTEXT}" \
+        get secret "${TOKEN_SECRET}" \
+        -n "${SERVICE_ACCOUNT_NAMESPACE}" \
+        --ignore-not-found \
+        -o name
+)"
 
-kubectl --context "${CONTROL_PLANE_CONTEXT}" apply -f - <<EOF
+if [[ -n "${SECRET_EXISTS}" ]]; then
+    log "ServiceAccount token Secret already exists — skipping setup"
+    echo "Token Secret '${TOKEN_SECRET}' found in namespace '${SERVICE_ACCOUNT_NAMESPACE}'."
+else
+    log "Creating ServiceAccount"
+
+    kubectl --context "${CONTROL_PLANE_CONTEXT}" apply -f - <<EOF
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -98,15 +103,9 @@ metadata:
   namespace: ${SERVICE_ACCOUNT_NAMESPACE}
 EOF
 
-# ------------------------------------------------------------
-# 5. Create ClusterRoleBinding
-#
-# Local POC uses cluster-admin.
-# ------------------------------------------------------------
+    log "Creating ClusterRoleBinding"
 
-log "Creating ClusterRoleBinding"
-
-kubectl --context "${CONTROL_PLANE_CONTEXT}" apply -f - <<EOF
+    kubectl --context "${CONTROL_PLANE_CONTEXT}" apply -f - <<EOF
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -121,15 +120,9 @@ subjects:
     namespace: ${SERVICE_ACCOUNT_NAMESPACE}
 EOF
 
-# ------------------------------------------------------------
-# 6. Create long-lived ServiceAccount token Secret
-# ------------------------------------------------------------
+    log "Creating ServiceAccount token Secret"
 
-log "Creating ServiceAccount token Secret"
-
-TOKEN_SECRET="${SERVICE_ACCOUNT}-token"
-
-kubectl --context "${CONTROL_PLANE_CONTEXT}" apply -f - <<EOF
+    kubectl --context "${CONTROL_PLANE_CONTEXT}" apply -f - <<EOF
 apiVersion: v1
 kind: Secret
 metadata:
@@ -139,25 +132,25 @@ metadata:
     kubernetes.io/service-account.name: ${SERVICE_ACCOUNT}
 type: kubernetes.io/service-account-token
 EOF
+fi
 
 # ------------------------------------------------------------
-# 7. Wait for token
+# 5. Wait for / read token
 # ------------------------------------------------------------
 
-log "Waiting for ServiceAccount token"
+log "Reading ServiceAccount token"
 
 TOKEN=""
 
 for i in {1..30}; do
-
-  TOKEN="$(
-      kubectl \
-          --context "${CONTROL_PLANE_CONTEXT}" \
-          get secret "${TOKEN_SECRET}" \
-          -n "${SERVICE_ACCOUNT_NAMESPACE}" \
-          -o jsonpath='{.data.token}' \
-          | base64 --decode
-  )"
+    TOKEN="$(
+        kubectl \
+            --context "${CONTROL_PLANE_CONTEXT}" \
+            get secret "${TOKEN_SECRET}" \
+            -n "${SERVICE_ACCOUNT_NAMESPACE}" \
+            -o jsonpath='{.data.token}' \
+            | base64 --decode
+    )"
 
     if [[ -n "${TOKEN}" ]]; then
         break
@@ -172,11 +165,10 @@ if [[ -z "${TOKEN}" ]]; then
 fi
 
 # ------------------------------------------------------------
-# 8. Get Kubernetes CA
+# 6. Get Kubernetes CA
 # ------------------------------------------------------------
 
 log "Getting Kubernetes CA"
-
 
 CA_DATA="$(
     kubectl config view \
@@ -190,14 +182,17 @@ if [[ -z "${CA_DATA}" ]]; then
 fi
 
 # ------------------------------------------------------------
-# 9. Generate cluster registration manifest
+# 7. Print cluster registration manifest to console
+#    (no files are written)
 # ------------------------------------------------------------
 
-log "Generating cluster registration manifest"
+log "Cluster registration manifest"
 
-mkdir -p "${CLUSTER_MANIFEST_DIR}"
+cat <<EOF
 
-cat > "${CLUSTER_MANIFEST}" <<EOF
+---
+# ArgoCD cluster Secret for: ${CLUSTER_NAME}
+# Save to: argocd/managed/clusters/${CLUSTER_NAME}.yaml
 apiVersion: v1
 kind: Secret
 metadata:
@@ -218,64 +213,40 @@ stringData:
         "caData": "${CA_DATA}"
       }
     }
-EOF
-
-# ------------------------------------------------------------
-# 10. Generate cluster-specific values directory
-# ------------------------------------------------------------
-
-log "Generating control-plane values"
-
-mkdir -p "${CLUSTER_VALUES_DIR}"
-
-if [[ ! -f "${CLUSTER_VALUES_FILE}" ]]; then
-
-    cat > "${CLUSTER_VALUES_FILE}" <<EOF
-# Cluster-specific ArgoCD values for ${CLUSTER_NAME}.
-#
-# Common configuration is maintained in:
-# control-planes/values/default.yaml
-#
-# Values in this file override the common configuration.
 
 EOF
 
-    echo "Created ${CLUSTER_VALUES_FILE}"
-else
-    echo "${CLUSTER_VALUES_FILE} already exists. Keeping existing configuration."
-fi
-
 # ------------------------------------------------------------
-# 11. Summary
+# 8. Summary
 # ------------------------------------------------------------
 
-log "Control plane created"
+log "Control plane ready"
 
 echo
-echo "Cluster:"
-echo "  ${CLUSTER_NAME}"
+echo "Cluster          : ${CLUSTER_NAME}"
+echo "Context          : ${CONTROL_PLANE_CONTEXT}"
+echo "Container        : ${CLUSTER_CONTAINER}"
+echo "IP               : ${CLUSTER_IP}"
+echo "ArgoCD server    : ${CLUSTER_SERVER}"
 echo
-echo "Kubernetes context:"
-echo "  ${CONTROL_PLANE_CONTEXT}"
+echo "Bearer token:"
 echo
-echo "Cluster container:"
-echo "  ${CLUSTER_CONTAINER}"
+echo "  ${TOKEN}"
 echo
-echo "Cluster IP:"
-echo "  ${CLUSTER_IP}"
+echo "CA certificate (base64):"
 echo
-echo "ArgoCD server:"
-echo "  ${CLUSTER_SERVER}"
+echo "  ${CA_DATA}"
 echo
-echo "Cluster registration:"
-echo "  ${CLUSTER_MANIFEST}"
+echo "Next steps:"
 echo
-echo "Cluster values:"
-echo "  ${CLUSTER_VALUES_FILE}"
+echo "  1. Copy the manifest above into:"
+echo "       argocd/managed/clusters/${CLUSTER_NAME}.yaml"
 echo
-echo "Next:"
+echo "  2. Create cluster-specific values (if needed):"
+echo "       control-planes/values/${CLUSTER_NAME}/default.yaml"
 echo
-echo "  git add ${CLUSTER_MANIFEST} ${CLUSTER_VALUES_FILE}"
-echo "  git commit -m \"Add control plane ${CLUSTER_NAME}\""
-echo "  git push"
+echo "  3. Commit and push:"
+echo "       git add argocd/managed/clusters/${CLUSTER_NAME}.yaml"
+echo "       git commit -m \"Add control plane ${CLUSTER_NAME}\""
+echo "       git push"
 echo

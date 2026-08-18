@@ -1,3 +1,62 @@
 server:
   service:
     type: ClusterIP
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ArgoCD Notifications — user Application status callbacks
+#
+# Fires on user Application sync/health events on this control-plane ArgoCD.
+# Platform service validates the Bearer token against NOTIFICATION_TOKEN.
+#
+# Token: set notifications.secret.items.platform-notification-token in a
+# per-CP override file (control-planes/values/<name>/default.yaml).
+# Never commit real token values in this file.
+# ─────────────────────────────────────────────────────────────────────────────
+notifications:
+  enabled: true
+
+  secret:
+    items:
+      # Override with the actual shared token in per-CP values or CI secret injection.
+      platform-notification-token: ""
+
+  notifiers:
+    service.webhook.platform-status: |
+      url: http://argocd-platform-service:8080
+      headers:
+        - name: Authorization
+          value: Bearer $platform-notification-token
+        - name: Content-Type
+          value: application/json
+
+  # Triggers fired for user Applications that carry the subscription annotation.
+  # Subscription annotations are added by charts/application-registration.
+  triggers:
+    trigger.on-sync-succeeded: |
+      - when: app.status.sync.status == 'Synced' && app.status.health.status == 'Healthy'
+        send: [platform-status-update]
+    trigger.on-sync-failed: |
+      - when: app.status.sync.status == 'Failed'
+        send: [platform-status-update]
+    trigger.on-health-degraded: |
+      - when: app.status.health.status == 'Degraded'
+        send: [platform-status-update]
+    trigger.on-progressing: |
+      - when: app.status.health.status == 'Progressing'
+        send: [platform-status-update]
+
+  templates:
+    template.platform-status-update: |
+      webhook:
+        platform-status:
+          method: POST
+          path: /internal/argocd/status
+          body: |
+            {
+              "resourceType": "{{index .app.metadata.labels "argocd-platform/resource-type"}}",
+              "applicationName": "{{.app.metadata.name}}",
+              "partitionNumber": "{{index .app.metadata.labels "argocd-platform/partition-number"}}",
+              "controlPlane": "{{index .app.metadata.labels "argocd-platform/control-plane"}}",
+              "syncStatus": "{{.app.status.sync.status}}",
+              "healthStatus": "{{.app.status.health.status}}"
+            }

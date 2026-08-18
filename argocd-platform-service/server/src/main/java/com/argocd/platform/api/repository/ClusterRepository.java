@@ -16,6 +16,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import static com.argocd.platform.db.jooq.Tables.CLUSTER_PARTITIONS;
 import static com.argocd.platform.db.jooq.Tables.CLUSTERS;
 import static com.argocd.platform.db.jooq.Tables.CONTROL_PLANES;
 
@@ -103,6 +104,32 @@ public class ClusterRepository {
     public void deleteById(UUID id) {
         dsl.deleteFrom(CLUSTERS)
                 .where(CLUSTERS.ID.eq(id))
+                .execute();
+    }
+
+    /**
+     * Updates the status of all clusters in the given partition that are assigned to
+     * the named control plane. Resolves both the partition and the control plane via
+     * subqueries — no pre-lookup of UUIDs required by the caller.
+     *
+     * <p>This method intentionally does NOT publish any {@code PartitionChangedEvent}
+     * to avoid triggering a reconcile loop (sync → notify → status update → notify → …).
+     *
+     * @return the number of rows updated (0 if the partition or CP does not exist)
+     */
+    public int updateStatusByPartitionNumberAndControlPlaneName(
+            int partitionNumber, String controlPlaneName, String status) {
+        return dsl.update(CLUSTERS)
+                .set(CLUSTERS.STATUS, status)
+                .set(CLUSTERS.UPDATED_AT, DSL.currentLocalDateTime())
+                .where(CLUSTERS.CLUSTER_PARTITION_ID.in(
+                        DSL.select(CLUSTER_PARTITIONS.ID)
+                                .from(CLUSTER_PARTITIONS)
+                                .where(CLUSTER_PARTITIONS.PARTITION_NUMBER.eq(partitionNumber))))
+                .and(CLUSTERS.CONTROL_PLANE_ID.in(
+                        DSL.select(CONTROL_PLANES.ID)
+                                .from(CONTROL_PLANES)
+                                .where(CONTROL_PLANES.NAME.eq(controlPlaneName))))
                 .execute();
     }
 

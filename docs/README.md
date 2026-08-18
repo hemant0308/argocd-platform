@@ -1819,7 +1819,7 @@ and use measurements to choose:
 |---|---|---|
 | `clusters` | Global (`clusters.name` DB unique constraint) | Service-level pre-check → HTTP 409 on duplicate; DB constraint as safety net |
 | `projects` | Global (`projects.name` DB unique constraint) | Service-level pre-check → HTTP 409 on duplicate; DB constraint as safety net |
-| `applications` | Per project (`(project_id, name)` unique constraint) | 5-char hex suffix appended on creation (e.g. `my-app` → `my-app-3f2a1`); suffix space (~1 M combinations) eliminates the need for a pre-check |
+| `applications` | Global (`applications.name` DB unique constraint — migration v1.0.5) | Service appends a 5-char lowercase hex suffix on creation (e.g. `my-app` → `my-app-3f2a1`); suffix space (~1 M combinations) eliminates the need for a pre-check. The original `(project_id, name)` constraint was too loose — ArgoCD Application names must be globally unique within a namespace. |
 
 The suffixed application name is returned in the create response and is the stable identity used in ArgoCD. Callers must store it — the original base name alone is not a valid lookup key.
 
@@ -1858,10 +1858,21 @@ The platform has no authentication layer. Users are identified by UUID only.
 
 **Needed:** Support pluggable external identity providers — LDAP, Azure AD, Google OAuth, GitHub OAuth. Multiple providers must be usable simultaneously so different teams can authenticate via different corporate directories.
 
-### Project authorization via AD groups
-Project membership is currently individual user-to-project only. This does not scale for teams managed via Active Directory or LDAP groups.
+### Project and Cluster authorization via AD groups
+Project membership is currently individual user-to-project only (`project_members` table). Cluster ownership is not modelled at all — there is no `created_by` or `cluster_members` tracking. Neither scales for teams managed via Active Directory or LDAP groups.
 
-**Needed:** Projects must be authorizable via AD/LDAP groups in addition to individual users. A user is authorized for a project if they are a direct member or if any of their group memberships grants access.
+**Needed — two related capabilities:**
+
+**1. Cluster ownership model:**
+- Add `created_by UUID` to the `clusters` table — the registering user is the implicit initial owner.
+- Add a `cluster_members` table (mirrors `project_members`: `cluster_id`, `user_id`, `role: OWNER | MEMBER`) so ownership can be delegated.
+- Enforce at service layer: only cluster members (OWNER or MEMBER) may add a cluster to a project.
+- AD group memberships must count as cluster membership — see capability 2.
+
+**2. AD group-based authorization for both projects and clusters:**
+- A user is authorized for a project/cluster if they are a direct member (`project_members`/`cluster_members`) OR if any of their AD group memberships grants access.
+- Group resolution must be cached and refreshed from the identity provider on a configurable interval.
+- This replaces the per-user role check in `ProjectService` and the future `ClusterService` ownership check.
 
 ---
 
@@ -1882,6 +1893,9 @@ Resource `status` fields (`UNKNOWN`, `ACTIVE`, `ERROR`) are never updated after 
 ## 32.3 ApplicationSet Behaviour
 
 ### Configurable poll interval per resource type
+
+> **Status: ✅ Completed** — `requeueAfterSeconds` is independently configurable per resource type via `argocd/managed/values.yaml` (Level 1: partition-discovery AppSets; Level 2: group-discovery AppSets). Values are propagated from the parent chart to child partition charts via `valuesObject`. Change in one place tunes all partitions of that type simultaneously.
+
 All ApplicationSets share a single hardcoded poll interval. Different resource types change at very different frequencies.
 
 **Needed:** The reconciliation poll interval (`requeueAfterSeconds`) must be independently configurable per resource type — control-planes, cluster-partitions, project-partitions, application-partitions — without code changes.
@@ -1961,6 +1975,9 @@ Cluster credentials (API server tokens, TLS keys) and any ArgoCD API tokens are 
 ## 32.9 Partition-Level Response Caching
 
 ### Plugin Generator responses re-queried on every poll cycle
+
+> **Status: ✅ Completed** — Redis-backed `PluginCacheService` caches responses per `(resource, partitionNumber)` key with a configurable TTL (default 5 min). Cache is explicitly invalidated by `CacheInvalidationListener` on every `PartitionChangedEvent` published by service writes. `ArgoCDRefreshListener` triggers an immediate ArgoCD Application refresh after invalidation so the next poll cycle gets fresh data. Caching is opt-in via `CACHE_ENABLED=true`; local dev defaults to uncached.
+
 At steady state, most Plugin Generator calls return unchanged data. At scale this creates unnecessary database load across thousands of partitions.
 
 **Needed:** Plugin Generator responses must be cached at the partition level. The cache must be invalidated explicitly whenever partition state changes — application registered or deleted, cluster reassigned, cluster failover, project cluster assignment changed. Stale data must not be served; a TTL is a safety net only, not the primary consistency mechanism. Caching must complement event-driven reconciliation (§32.3): a write invalidates the cache, ArgoCD is refreshed, and the next Plugin Generator call gets fresh data from the database and repopulates the cache.
@@ -1984,6 +2001,8 @@ Failover today requires direct database writes with no progress tracking, no saf
 ---
 
 ## 32.11 ArgoCD Notification Integration
+
+> **Status: ✅ Completed** — ArgoCD notifications controller is configured on both managed ArgoCD and each CP ArgoCD via `bootstrap/managed-argocd/values.yaml` and `control-planes/values/default.yaml`. A unified `platform-status-update` webhook template reads resource metadata from Application labels (`argocd-platform/resource-type`, `argocd-platform/partition-number`, `argocd-platform/control-plane`) to avoid name-pattern parsing. The platform service exposes `POST /internal/argocd/status` (`ArgoCDStatusController`) which routes events to single-query DB status updates (`ArgoCDStatusService`). Resource statuses (`UNKNOWN`, `SYNCING`, `ACTIVE`, `DEGRADED`, `ERROR`) are now driven by live ArgoCD state. Token auth shared between managed ArgoCD and all CP ArgoCD instances via `NOTIFICATION_TOKEN` env var.
 
 ### ArgoCD state changes are not reflected in the platform database
 
@@ -2013,3 +2032,69 @@ User-facing notifications (webhooks, Slack, email, PagerDuty, etc.) are handled 
 The `application-registration` Helm chart must be updated to accept notification subscription configuration as values and render the corresponding ArgoCD notification annotations on the generated Application resource. This allows users to declare their notification preferences as part of application registration, and ArgoCD delivers the notifications directly.
 
 The Helm chart must support any notification channel and trigger combination that ArgoCD supports — the chart should not restrict or enumerate specific channels. The set of available notification channels and templates is an ArgoCD configuration concern on each control plane, not a platform service concern.
+
+---
+
+## 32.12 Resource Change History
+
+### No history of state changes per resource
+
+The platform has no record of what changed on a resource, when, or by whom. Status fields are overwritten in place. This prevents showing users a change timeline, debugging regressions, or auditing mutations.
+
+**Design constraints:**
+
+- History must be queryable frequently — the UI will show the last N changes per resource on every detail view. A generic `audit_log` table optimised for write throughput is insufficient; per-resource history tables with proper indexing are required.
+- Schema should be normalised per resource type rather than a single polymorphic table, so queries are type-safe and do not scan across unrelated rows.
+- Each history record captures: `resource_id`, `action` (`CREATE` | `UPDATE` | `STATUS_UPDATE` | `DELETE`), `performed_by` (user UUID, nullable for system actions such as ArgoCD notification callbacks), `changes` (JSONB with `before` / `after` snapshots of changed fields only — not the full entity), `created_at`.
+- Status updates from the ArgoCD notification callback (`POST /internal/argocd/status`) are high-frequency (every poll cycle × N resources). These should be recorded in a separate `status_history` subtable or gated behind a configurable flag to prevent flooding the change log visible to users.
+
+**Tables to add:**
+- `cluster_history` — indexed on `(cluster_id, created_at DESC)`
+- `project_history` — indexed on `(project_id, created_at DESC)`
+- `application_history` — indexed on `(application_id, created_at DESC)`
+
+**API to expose:**
+- `GET /api/v1/clusters/{id}/history?limit=20`
+- `GET /api/v1/projects/{id}/history?limit=20`
+- `GET /api/v1/applications/{id}/history?limit=20`
+
+**Capture point:** service layer (not DB triggers) so that request context — user identity, which API operation triggered the change — is available at write time.
+
+---
+
+## 32.13 Project ArgoCD AppProject Spec Configuration
+
+### No mechanism for per-project AppProject spec customisation
+
+AppProjects are currently generated with a fixed schema derived only from cluster assignments. Users cannot declare custom roles, source repository restrictions, sync windows, or resource allow/deny policies. The platform also has no way to enforce default security policies (e.g. blocking ArgoCD CRDs) across all projects.
+
+**Design approach — two-tier model:**
+
+**Tier 1 — Platform-enforced defaults (applied at chart generation time, not stored in DB):**
+
+Platform defaults are defined in Git (Helm values) and merged into every generated AppProject at reconciliation time. They cannot be overridden by user-provided spec. Examples:
+
+```yaml
+clusterResourceBlacklist:
+  - group: "argoproj.io"              # block ArgoCD CRDs
+    kind: "*"
+  - group: "apiextensions.k8s.io"     # block CRD creation
+    kind: "CustomResourceDefinition"
+```
+
+Changing a default in Git rolls out to all projects on the next ArgoCD sync — no DB migration needed.
+
+**Tier 2 — User-provided spec (stored as JSONB in the `projects` table, merged at generation):**
+
+Users may provide additional AppProject spec fields via the platform API. The merge rules and precedence are:
+
+- Platform-enforced blacklists are always appended — user cannot remove them.
+- User `clusterResourceBlacklist` entries are merged (union) with platform defaults.
+- User-provided `sourceRepos`, `roles`, `syncWindows`, `orphanedResources` are passed through verbatim.
+- `destinations` are not configurable by users — they are always derived from `project_clusters`.
+
+**Schema change:**
+- Add `spec JSONB` column to `projects` table (migration) — stores the user-provided AppProject spec fragment.
+- The plugin service merges `spec` with platform defaults when building the `project-groups` response.
+
+**Discussion deferred:** exact merge rules, which fields are user-overridable vs platform-only, and how to surface spec validation errors to the caller are to be designed separately.

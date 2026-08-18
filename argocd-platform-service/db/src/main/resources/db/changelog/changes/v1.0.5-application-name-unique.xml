@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
+
+    <!-- =========================================================
+         v1.0.5 — Global unique constraint + index on applications.name
+
+         ArgoCD Application names must be globally unique within an
+         ArgoCD namespace. The original constraint uk_applications_project_name
+         (project_id, name) was too loose — it allowed two projects to have an
+         application with the same name, which would conflict in ArgoCD.
+
+         This changeset:
+           1. Drops the scoped unique constraint.
+           2. Adds a global unique constraint on name alone.
+           3. Adds a non-unique index (implicit from the constraint) for
+              fast status-update lookups by name from the notification callback.
+         ========================================================= -->
+
+    <changeSet id="v1.0.5-drop-scoped-app-name-unique" author="argocd-platform">
+        <dropUniqueConstraint
+                tableName="applications"
+                constraintName="uk_applications_project_name"/>
+        <rollback>
+            <addUniqueConstraint
+                    tableName="applications"
+                    columnNames="project_id, name"
+                    constraintName="uk_applications_project_name"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.5-add-global-app-name-unique" author="argocd-platform">
+        <addUniqueConstraint
+                tableName="applications"
+                columnNames="name"
+                constraintName="uk_applications_name"/>
+        <rollback>
+            <dropUniqueConstraint
+                    tableName="applications"
+                    constraintName="uk_applications_name"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

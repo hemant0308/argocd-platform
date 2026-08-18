@@ -97,6 +97,24 @@ public class ApplicationRepository {
     }
 
     /**
+     * Updates the status of an application directly by name.
+     * Requires {@code uk_applications_name} unique constraint (added in v1.0.5) so the
+     * WHERE clause is a primary-key-equivalent point lookup on the name index.
+     *
+     * <p>This method intentionally does NOT publish any {@code PartitionChangedEvent}
+     * to avoid triggering a reconcile loop (sync → notify → status update → notify → …).
+     *
+     * @return the number of rows updated (0 if no application with that name exists)
+     */
+    public int updateStatusByName(String name, String status) {
+        return dsl.update(APPLICATIONS)
+                .set(APPLICATIONS.STATUS, status)
+                .set(APPLICATIONS.UPDATED_AT, DSL.currentLocalDateTime())
+                .where(APPLICATIONS.NAME.eq(name))
+                .execute();
+    }
+
+    /**
      * Deletes an application by id.
      * Callers must verify existence before calling this method.
      */

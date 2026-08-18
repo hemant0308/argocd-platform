@@ -5,3 +5,68 @@ server:
 configs:
   params:
     server.insecure: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ArgoCD Notifications — cluster/project partition status callbacks
+#
+# Fires on cluster-partition-* and project-partition-* Application events
+# on this managed ArgoCD instance. Platform service parses the Application
+# name to identify the partition and control plane, then updates DB status.
+#
+# Webhook URL and token reference intentionally duplicated from
+# control-planes/values/default.yaml — the two ArgoCD instances are
+# independent and each needs its own notification config.
+#
+# Token: override notifications.secret.items.platform-notification-token
+# via helm --set or a gitignored values override. Never commit real tokens.
+# ─────────────────────────────────────────────────────────────────────────────
+notifications:
+  enabled: true
+
+  secret:
+    items:
+      # Override with actual shared token in env-specific values or CI.
+      platform-notification-token: ""
+
+  notifiers:
+    service.webhook.platform-status: |
+      url: http://argocd-platform-service:8080
+      headers:
+        - name: Authorization
+          value: Bearer $platform-notification-token
+        - name: Content-Type
+          value: application/json
+
+  # Separate trigger names for cluster vs project partitions allow independent
+  # per-type templates and future per-type status logic in the platform service.
+  triggers:
+    trigger.on-cluster-partition-synced: |
+      - when: app.status.sync.status == 'Synced' && app.status.health.status == 'Healthy'
+        send: [platform-status-update]
+    trigger.on-cluster-partition-failed: |
+      - when: app.status.sync.status == 'Failed' || app.status.health.status == 'Degraded'
+        send: [platform-status-update]
+    trigger.on-project-partition-synced: |
+      - when: app.status.sync.status == 'Synced' && app.status.health.status == 'Healthy'
+        send: [platform-status-update]
+    trigger.on-project-partition-failed: |
+      - when: app.status.sync.status == 'Failed' || app.status.health.status == 'Degraded'
+        send: [platform-status-update]
+
+  # Identical template body to control-planes/values/default.yaml — reads resource
+  # metadata from Application labels rather than parsing the name.
+  templates:
+    template.platform-status-update: |
+      webhook:
+        platform-status:
+          method: POST
+          path: /internal/argocd/status
+          body: |
+            {
+              "resourceType": "{{index .app.metadata.labels "argocd-platform/resource-type"}}",
+              "applicationName": "{{.app.metadata.name}}",
+              "partitionNumber": "{{index .app.metadata.labels "argocd-platform/partition-number"}}",
+              "controlPlane": "{{index .app.metadata.labels "argocd-platform/control-plane"}}",
+              "syncStatus": "{{.app.status.sync.status}}",
+              "healthStatus": "{{.app.status.health.status}}"
+            }

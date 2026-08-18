@@ -126,6 +126,12 @@ argocd:
       # Safety-net TTL.  ArgoCD reconciles periodically so stale entries older
       # than ttl-minutes are evicted automatically even without an explicit event.
       ttl-minutes: ${CACHE_TTL_MINUTES:5}
+    notifications:
+      # Bearer token expected in Authorization header of POST /internal/argocd/status.
+      # Must match the platform-notification-token value in argocd-notifications-secret
+      # on both the managed ArgoCD and all control-plane ArgoCD instances.
+      # Blank (default) disables validation — local dev only, never blank in production.
+      token: ${NOTIFICATION_TOKEN:}
 
 # ----------------------------------------------------------------
 # Logging

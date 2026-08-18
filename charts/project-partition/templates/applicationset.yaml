@@ -40,6 +40,13 @@ spec:
   template:
     metadata:
       name: 'project-partition-{{ .Values.partitionNumber }}-{{ "{{ .controlPlane }}" }}'
+      labels:
+        argocd-platform/resource-type: project
+        argocd-platform/partition-number: "{{ .Values.partitionNumber }}"
+        argocd-platform/control-plane: '{{ "{{ .controlPlane }}" }}'
+      annotations:
+        notifications.argoproj.io/subscribe.on-project-partition-synced.platform-status: ""
+        notifications.argoproj.io/subscribe.on-project-partition-failed.platform-status: ""
 
     spec:
       project: default

@@ -24,8 +24,14 @@ metadata:
   name: {{ .name }}
   namespace: argocd
   labels:
-    argocd-platform/partition: "{{ $.Values.partitionNumber }}"
+    argocd-platform/resource-type: application
+    argocd-platform/partition-number: "{{ $.Values.partitionNumber }}"
     argocd-platform/control-plane: "{{ $.Values.controlPlane }}"
+  annotations:
+    notifications.argoproj.io/subscribe.on-sync-succeeded.platform-status: ""
+    notifications.argoproj.io/subscribe.on-sync-failed.platform-status: ""
+    notifications.argoproj.io/subscribe.on-health-degraded.platform-status: ""
+    notifications.argoproj.io/subscribe.on-progressing.platform-status: ""
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:

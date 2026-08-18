@@ -21,6 +21,7 @@ import java.util.stream.Collectors;
 
 import static com.argocd.platform.db.jooq.Tables.CLUSTERS;
 import static com.argocd.platform.db.jooq.Tables.PROJECT_CLUSTERS;
+import static com.argocd.platform.db.jooq.Tables.PROJECT_PARTITIONS;
 import static com.argocd.platform.db.jooq.Tables.PROJECTS;
 
 @Repository
@@ -155,6 +156,27 @@ public class ProjectRepository {
                                                 jsonbUtils.fromJsonb(row.namespaces(), STRING_LIST), List.of()))
                                         .build(),
                                 Collectors.toList())));
+    }
+
+    /**
+     * Updates the status of all projects in the given partition number.
+     * Resolves the partition UUID via subquery — no pre-lookup required by the caller.
+     * Uses last-write-wins semantics — whichever control plane reports last sets the status.
+     *
+     * <p>This method intentionally does NOT publish any {@code PartitionChangedEvent}
+     * to avoid triggering a reconcile loop.
+     *
+     * @return the number of rows updated (0 if the partition does not exist)
+     */
+    public int updateStatusByPartitionNumber(int partitionNumber, String status) {
+        return dsl.update(PROJECTS)
+                .set(PROJECTS.STATUS, status)
+                .set(PROJECTS.UPDATED_AT, DSL.currentLocalDateTime())
+                .where(PROJECTS.PROJECT_PARTITION_ID.in(
+                        DSL.select(PROJECT_PARTITIONS.ID)
+                                .from(PROJECT_PARTITIONS)
+                                .where(PROJECT_PARTITIONS.PARTITION_NUMBER.eq(partitionNumber))))
+                .execute();
     }
 
     /**
