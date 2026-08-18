@@ -36,6 +36,9 @@ spec:
             # Generation bumps whenever partition membership changes in the DB,
             # forcing this Application to re-sync and re-render the inner AppSet.
             generation: '{{`{{generation}}`}}'
+            # Poll interval for the inner cluster-groups ApplicationSet.
+            # Controlled centrally from argocd/managed values.
+            requeueAfterSeconds: {{ .Values.requeueAfterSeconds.clusterGroups }}
 
       # Deploy to the managed ArgoCD cluster itself — the chart renders an
       # ApplicationSet resource that lives on the managed control plane.

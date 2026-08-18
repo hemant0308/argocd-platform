@@ -11,3 +11,9 @@ generation: ""
 # Must match the repoURL used by the outer bootstrap application.
 repoURL: https://github.com/hemant0308/argocd-platform.git
 targetRevision: main
+
+# Poll interval (seconds) for the cluster-groups plugin generator.
+# Injected from argocd/managed via the parent ApplicationSet valuesObject.
+# Override requeueAfterSeconds.clusterGroups in argocd/managed/values.yaml
+# to tune for all partitions at once.
+requeueAfterSeconds: 30

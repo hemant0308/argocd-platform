@@ -17,13 +17,27 @@ git:
   targetRevision: "main"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# ApplicationSet poll intervals
+# ApplicationSet poll intervals (seconds)
 # Tune based on scale-test results. Lower = faster propagation, higher DB load.
+#
+# Level 1 (partition-discovery, live in argocd/managed):
+#   How often the managed ArgoCD asks "how many partitions exist now?"
+#   Responses are small and change rarely — 30s is a safe default.
+#
+# Level 2 (group-discovery, rendered by charts/*-partition):
+#   How often each partition AppSet asks "what resources are in my partition?"
+#   These responses carry actual cluster/project/application payloads and are
+#   the primary reconciliation signal. Tune based on acceptable propagation lag.
 # ─────────────────────────────────────────────────────────────────────────────
 requeueAfterSeconds:
+  # Level 1 — partition-discovery AppSets (argocd/managed)
   clusterPartitions: 30
   projectPartitions: 30
   applicationPartitions: 30
+  # Level 2 — group-discovery AppSets (charts/*-partition)
+  clusterGroups: 30
+  projectGroups: 30
+  applicationGroups: 30
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Control-plane ApplicationSet
