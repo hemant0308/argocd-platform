@@ -90,7 +90,7 @@ public class DeletionStateTransitionTask {
      * plugin cache is invalidated and the app disappears from the next plugin response,
      * triggering ArgoCD to prune it with the {@code resources-finalizer}.
      */
-    @Scheduled(fixedDelayString = "${argocd.platform.deletion.check-interval-ms:30000}")
+    @Scheduled(fixedDelayString = "${argocd.platform.deletion.check-interval-ms:3000000}")
     @Transactional
     public void fallbackHardDeleteTimeout() {
         LocalDateTime cutoff = LocalDateTime.now().minusSeconds(hardDeleteFallbackSeconds);
@@ -132,7 +132,7 @@ public class DeletionStateTransitionTask {
      * <p>No {@link PartitionChangedEvent} is published — the app was already removed
      * from the plugin response when {@code SOFT_DELETE} was first set.
      */
-    @Scheduled(fixedDelayString = "${argocd.platform.deletion.check-interval-ms:30000}")
+    @Scheduled(fixedDelayString = "${argocd.platform.deletion.check-interval-ms:3000000}")
     @Transactional
     public void timeoutSoftDelete() {
         LocalDateTime cutoff = LocalDateTime.now().minusSeconds(softDeleteTimeoutSeconds);

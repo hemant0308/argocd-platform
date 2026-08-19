@@ -56,6 +56,7 @@ notifications:
         send: [platform-status-update]
     trigger.on-application-partition-synced: |
       - when: app.status != nil && app.status.sync != nil && app.status.sync.status == 'Synced' && app.status.health != nil && app.status.health.status == 'Healthy'
+        oncePer: app.metadata.labels["argocd-platform/generation"]
         send: [platform-status-update]
     # deletionTimestamp is a *metav1.Time pointer; when not set it is nil (not "").
     # In expr-lang nil != "" evaluates to true, causing this trigger to fire for every
