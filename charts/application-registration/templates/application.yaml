@@ -48,8 +48,6 @@ metadata:
   {{- if .hardDelete }}
   finalizers:
     - resources-finalizer.argocd.argoproj.io
-  {{- else }}
-  finalizers: []
   {{- end }}
 spec:
   project: {{ .project }}
