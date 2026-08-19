@@ -44,6 +44,20 @@ spec:
   template:
     metadata:
       name: 'application-partition-{{ .Values.partitionNumber }}-{{ "{{ .controlPlane }}" }}'
+      labels:
+        # resource-type drives switch-case routing in ArgoCDStatusService.
+        argocd-platform/resource-type: application-partition
+        # partition-number and control-plane are required @NotBlank fields in ArgoCDStatusRequest.
+        argocd-platform/partition-number: "{{ .Values.partitionNumber }}"
+        argocd-platform/control-plane: '{{ "{{ .controlPlane }}" }}'
+        # generation carries the partition version counter so the status service can
+        # confirm — without a fixed delay — that the finalizer-bearing manifest was
+        # included in this sync before advancing HARD_DELETE → AWAITING_PRUNE.
+        argocd-platform/generation: '{{ "{{ .generation }}" }}'
+      annotations:
+        # Subscribe this Application to on-application-partition-synced so the managed
+        # ArgoCD fires a webhook to /internal/argocd/status on every successful sync.
+        notifications.argoproj.io/subscribe.on-application-partition-synced.platform-status: ""
 
     spec:
       project: default

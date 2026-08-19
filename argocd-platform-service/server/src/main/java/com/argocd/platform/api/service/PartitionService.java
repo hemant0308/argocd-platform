@@ -127,6 +127,41 @@ public class PartitionService {
     }
 
     // -------------------------------------------------------------------------
+    // Write path helpers — delegate directly to repository (must be transactional)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Atomically bumps the application partition's {@code generation} counter
+     * and returns the new value. Must be called inside the same transaction as
+     * the triggering write (create/update/soft-delete/hard-delete) so the
+     * generation change and the app-state change are atomic.
+     *
+     * <p>For hard-delete: the returned value is stored in
+     * {@code applications.deletion_partition_generation} and later used by
+     * the status service to race-safely confirm that the correct generation
+     * was synced before advancing to {@code AWAITING_PRUNE}.
+     *
+     * @param partitionId UUID of the application partition to bump
+     * @return new generation value after the increment
+     */
+    public long bumpApplicationPartitionGeneration(UUID partitionId) {
+        return partitionRepository.bumpAndReturnApplicationPartitionGeneration(partitionId);
+    }
+
+    /**
+     * Returns the current generation of an application partition without bumping it.
+     * Used by the plugin service to include {@code generation} in the
+     * {@code application-groups} response so ArgoCD carries it as a label
+     * on the generated {@code application-partition-{N}-{cp}} Application.
+     *
+     * @param partitionId UUID of the application partition
+     * @return current generation (0 if partition does not exist)
+     */
+    public long findApplicationPartitionGeneration(UUID partitionId) {
+        return partitionRepository.findApplicationPartitionGeneration(partitionId);
+    }
+
+    // -------------------------------------------------------------------------
     // List path — not cached in-memory (counts are dynamic)
     // -------------------------------------------------------------------------
 

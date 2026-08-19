@@ -54,7 +54,7 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
-      password: ${REDIS_PASSWORD:}
+      password: ${REDIS_PASSWORD:redis}
       ssl:
         enabled: ${REDIS_SSL:false}
       timeout: ${REDIS_TIMEOUT:2000ms}
@@ -122,7 +122,7 @@ argocd:
       # Set CACHE_ENABLED=true to activate Redis-backed plugin generator caching.
       # When false the PluginCacheService and all cache listeners are not created,
       # and the Redis health indicator is disabled so local dev stays GREEN.
-      enabled: ${CACHE_ENABLED:false}
+      enabled: ${CACHE_ENABLED:true}
       # Safety-net TTL.  ArgoCD reconciles periodically so stale entries older
       # than ttl-minutes are evicted automatically even without an explicit event.
       ttl-minutes: ${CACHE_TTL_MINUTES:5}

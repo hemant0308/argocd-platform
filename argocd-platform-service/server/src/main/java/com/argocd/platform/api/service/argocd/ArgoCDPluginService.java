@@ -259,6 +259,13 @@ public class ArgoCDPluginService implements PluginExecutor {
                 .orElseThrow(() -> new InvalidRequestException(
                         "No application partition found with partitionNumber: " + partitionNumber));
 
+        // Fetch the current partition generation.  This value travels in the
+        // application-partition-{N}-{cp} Application's argocd-platform/generation label.
+        // When application-partition-{N}-{cp} fires on-application-partition-synced, the
+        // status service reads this label and matches it against each hard-deleting app's
+        // deletion_partition_generation to confirm the finalizer-bearing manifest was synced.
+        long partitionGeneration = partitionService.findApplicationPartitionGeneration(partitionId);
+
         List<ApplicationItem> applications = argoCDApplicationRepository.findByPartitionId(partitionId);
 
         // Group by controlPlane (preserve insertion order); skip apps without a CP.
@@ -279,6 +286,7 @@ public class ArgoCDPluginService implements PluginExecutor {
                                 am.put("project", a.getProject());
                                 am.put("cluster", a.getCluster());
                                 am.put("sources", a.getSources()); // free-form maps, passed verbatim
+                                am.put("hardDelete", a.isHardDelete()); // drives conditional finalizer in Helm chart
                                 return am;
                             })
                             .collect(Collectors.toList());
@@ -287,6 +295,9 @@ public class ArgoCDPluginService implements PluginExecutor {
                     m.put("partitionNumber", partitionNumber);
                     m.put("controlPlane", entry.getKey());
                     m.put("applications", minimalApps);
+                    // Partition generation — same value for all CPs; each CP's
+                    // application-partition-{N}-{cp} Application carries it as a label.
+                    m.put("generation", partitionGeneration);
                     return m;
                 })
                 .collect(Collectors.toList());

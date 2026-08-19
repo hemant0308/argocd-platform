@@ -3,12 +3,14 @@ package com.argocd.platform.api.service;
 import com.argocd.platform.api.cache.event.PartitionChangedEvent;
 import com.argocd.platform.api.config.PartitionProperties;
 import com.argocd.platform.api.exception.InvalidRequestException;
+import com.argocd.platform.api.exception.ResourceAlreadyExistsException;
 import com.argocd.platform.api.exception.ResourceNotFoundException;
 import com.argocd.platform.api.model.request.ApplicationRequest;
 import com.argocd.platform.api.model.response.ApplicationResponse;
 import com.argocd.platform.api.repository.ApplicationRepository;
 import com.argocd.platform.api.repository.ClusterRepository;
 import com.argocd.platform.api.repository.ProjectRepository;
+import com.argocd.platform.api.util.DeletionMode;
 import com.argocd.platform.api.util.JsonbUtils;
 import com.argocd.platform.api.util.PartitionType;
 import com.argocd.platform.api.util.ResourceStatus;
@@ -84,6 +86,14 @@ public class ApplicationService {
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Application not found: " + id));
 
+        // Reject mutations while deletion is in progress or the row is tombstoned.
+        // deletion_mode IS NOT NULL → initiation phase (SOFT_DELETE, HARD_DELETE, AWAITING_PRUNE)
+        // deleted_at IS NOT NULL    → completion phase (soft-tombstone, kept for audit)
+        if (applicationRepository.isBeingDeleted(id)) {
+            throw new ResourceAlreadyExistsException(
+                    "Application '" + existing.getName() + "' is being deleted and cannot be modified");
+        }
+
         UUID clusterId = resolveClusterId(request);
 
         validateClusterInProject(existing.getProjectId(), clusterId);
@@ -94,6 +104,10 @@ public class ApplicationService {
                 .setGeneration(existing.getGeneration() + 1L);
 
         ApplicationsEntity updated = applicationRepository.update(id, existing, request.getSources());
+        // Bump partition generation so ArgoCD's application-partition-{N}-{cp} Application
+        // carries the new generation in its label on next sync, enabling the status service
+        // to correctly anchor deletion_partition_generation comparisons.
+        partitionService.bumpApplicationPartitionGeneration(existing.getApplicationPartitionId());
         eventPublisher.publishEvent(
                 new PartitionChangedEvent(this, existing.getApplicationPartitionId(), PartitionType.APPLICATION));
         return toResponse(updated, request.getSources());
@@ -103,8 +117,9 @@ public class ApplicationService {
             new TypeReference<>() {};
 
     /**
-     * Returns all applications ordered by name, each with their sources JSONB deserialized.
-     * Uses two queries to avoid N+1: one for entities, one map query for all sources.
+     * Returns all active (non-deleted) applications ordered by name, each with their
+     * sources JSONB deserialized. Uses two queries to avoid N+1: one for entities,
+     * one map query for all sources.
      */
     public List<ApplicationResponse> list() {
         List<ApplicationsEntity> entities = applicationRepository.findAll();
@@ -117,17 +132,59 @@ public class ApplicationService {
     }
 
     /**
-     * Deletes an application by id.
+     * Initiates deletion of an application.
+     *
+     * <p>This does NOT physically delete the database row. Instead it enters the
+     * deletion state machine and publishes a {@link PartitionChangedEvent} so the
+     * plugin generator cache is refreshed immediately:
+     *
+     * <ul>
+     *   <li>Soft delete ({@code hardDelete = false}): sets {@code deletion_mode = SOFT_DELETE};
+     *       app disappears from the plugin response; ArgoCD prunes the Application without
+     *       cascade (no finalizer). The {@code on-deleted} ArgoCD notification sets
+     *       {@code deleted_at}; a scheduler timeout is the fallback.</li>
+     *   <li>Hard delete ({@code hardDelete = true}): sets {@code deletion_mode = HARD_DELETE};
+     *       app remains in plugin response with {@code hardDelete = true} so ArgoCD syncs
+     *       the {@code resources-finalizer}. After the configured scheduler delay the mode
+     *       advances to {@code AWAITING_PRUNE}; the app disappears from the response; ArgoCD
+     *       prunes with cascade. The {@code on-deleted} notification sets {@code deleted_at}.</li>
+     * </ul>
+     *
+     * <p>A 409 is returned if deletion is already in progress or the row is tombstoned.
+     *
+     * @param id         the application UUID
+     * @param hardDelete {@code true} for cascade (resource-finalizer) deletion
      */
     @Transactional
-    public void delete(UUID id) {
+    public void initiateDelete(UUID id, boolean hardDelete) {
         ApplicationsEntity existing = applicationRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Application not found: " + id));
-        UUID partitionId = existing.getApplicationPartitionId();
-        applicationRepository.deleteById(id);
+
+        if (applicationRepository.isBeingDeleted(id)) {
+            throw new ResourceAlreadyExistsException(
+                    "Application '" + existing.getName() + "' deletion is already in progress");
+        }
+
+        String mode = hardDelete ? DeletionMode.HARD_DELETE.name() : DeletionMode.SOFT_DELETE.name();
+
+        // Atomically bump the partition generation in this same transaction.
+        // For HARD_DELETE: the new generation is stored in deletion_partition_generation so the
+        // status service can confirm — when application-partition-{N}-{cp} syncs at generation m —
+        // that the manifest carrying the resources-finalizer was included in that sync, and only
+        // then advance to AWAITING_PRUNE.  SOFT_DELETE does not need the generation stored
+        // (there is no finalizer to confirm), but we still bump it to keep the counter monotonic.
+        long newGeneration = partitionService.bumpApplicationPartitionGeneration(
+                existing.getApplicationPartitionId());
+        Long deletionPartitionGeneration = hardDelete ? newGeneration : null;
+
+        applicationRepository.initiateDeletion(id, mode, deletionPartitionGeneration);
+
+        // Refresh plugin cache so the deletion state is reflected on the next ArgoCD poll:
+        //   SOFT_DELETE   → app disappears from response, ArgoCD prunes without cascade
+        //   HARD_DELETE   → app appears with hardDelete: true, ArgoCD syncs finalizer
         eventPublisher.publishEvent(
-                new PartitionChangedEvent(this, partitionId, PartitionType.APPLICATION));
+                new PartitionChangedEvent(this, existing.getApplicationPartitionId(), PartitionType.APPLICATION));
     }
 
     // -------------------------------------------------------------------------

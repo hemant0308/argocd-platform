@@ -23,7 +23,13 @@ import lombok.Data;
  *   <li>{@code cluster} → update all clusters in {@code partitionNumber} on {@code controlPlane}</li>
  *   <li>{@code project} → update all projects in {@code partitionNumber} (last-write-wins)</li>
  *   <li>{@code application} → update single application by {@code applicationName}</li>
+ *   <li>{@code application-partition} → event-driven HARD_DELETE → AWAITING_PRUNE transition;
+ *       requires {@code generation} (partition generation from the Application label)</li>
  * </ul>
+ *
+ * <p>Deletion routing (application only):
+ * When {@code deletionTimestamp} is non-empty the event is an {@code on-deleted} notification —
+ * the service marks the application as deleted regardless of sync/health status.
  */
 @Data
 public class ArgoCDStatusRequest {
@@ -51,4 +57,34 @@ public class ArgoCDStatusRequest {
     /** ArgoCD health status: {@code Healthy}, {@code Degraded}, {@code Progressing}, {@code Missing}, {@code Unknown}. */
     @NotBlank
     private String healthStatus;
+
+    /**
+     * RFC 3339 timestamp set by K8s when the Application deletion is initiated.
+     * Non-empty only on {@code on-deleted} trigger events. Empty string for all other triggers.
+     *
+     * <p>When non-empty for {@code resourceType = "application"}, the service calls
+     * {@code markDeleted(applicationName)} instead of the normal status update path.
+     */
+    private String deletionTimestamp;
+
+    /**
+     * Value of the {@code argocd-platform/deletion-mode} label on the Application.
+     * {@code "hard"} for hard-delete Applications; empty string for soft-delete or active Applications.
+     *
+     * <p>Informational only — the deletion completion action ({@link #deletionTimestamp}) is the
+     * authoritative signal; this field is logged for observability.
+     */
+    private String deletionMode;
+
+    /**
+     * Value of the {@code argocd-platform/generation} label on the Application.
+     * Populated only for {@code resourceType = "application-partition"} notifications —
+     * it carries the partition generation at the time of the sync so the status service
+     * can confirm which hard-deleting apps had their finalizer manifest included in that sync.
+     *
+     * <p>Intentionally <em>not</em> {@code @NotBlank}: cluster/project/application events do not
+     * set this label, so the field will be an empty string for those resource types.
+     * Handlers must check for blank/null before parsing.
+     */
+    private String generation;
 }

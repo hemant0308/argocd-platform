@@ -52,6 +52,12 @@ notifications:
     trigger.on-project-partition-failed: |
       - when: app.status.sync.status == 'Failed' || app.status.health.status == 'Degraded'
         send: [platform-status-update]
+    trigger.on-application-partition-synced: |
+      - when: app.status.sync.status == 'Synced' && app.status.health.status == 'Healthy'
+        send: [platform-status-update]
+    trigger.on-deleted: |
+      - when: app.metadata.deletionTimestamp != ""
+        send: [platform-status-update]
 
   # Identical template body to control-planes/values/default.yaml — reads resource
   # metadata from Application labels rather than parsing the name.
@@ -68,5 +74,8 @@ notifications:
               "partitionNumber": "{{index .app.metadata.labels "argocd-platform/partition-number"}}",
               "controlPlane": "{{index .app.metadata.labels "argocd-platform/control-plane"}}",
               "syncStatus": "{{.app.status.sync.status}}",
-              "healthStatus": "{{.app.status.health.status}}"
+              "healthStatus": "{{.app.status.health.status}}",
+              "deletionTimestamp": "{{.app.metadata.deletionTimestamp}}",
+              "deletionMode": "{{index .app.metadata.labels "argocd-platform/deletion-mode"}}",
+              "generation": "{{index .app.metadata.labels "argocd-platform/generation"}}"
             }

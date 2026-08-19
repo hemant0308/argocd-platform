@@ -11,5 +11,7 @@
     <include file="db/changelog/changes/v1.0.3-simplify-application-sources.xml"/>
     <include file="db/changelog/changes/v1.0.4-control-plane-endpoint.xml"/>
     <include file="db/changelog/changes/v1.0.5-application-name-unique.xml"/>
+    <include file="db/changelog/changes/v1.0.6-application-deletion-state.xml"/>
+    <include file="db/changelog/changes/v1.0.7-application-deletion-partition-generation.xml"/>
 
 </databaseChangeLog>

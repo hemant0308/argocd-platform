@@ -7,14 +7,23 @@
   fromJsonArray (Helm built-in) correctly parses JSON arrays into a Go slice.
 
   Inside the range:
-    .          = current application item  { name, project, cluster, sources }
+    .          = current application item  { name, project, cluster, sources, hardDelete }
     .sources   = []interface{} — raw ArgoCD sources array, passed verbatim
+    .hardDelete = bool — true when deletion_mode = HARD_DELETE in the platform DB
     $.Values   = chart-level values  { partitionNumber, controlPlane, applications }
 
   Sources passthrough:
     .sources | toJson emits the array as a YAML flow sequence (valid YAML 1.1).
     Any ArgoCD source shape is supported — Helm, Kustomize, Directory, Plugin,
     ref, multi-source — without any schema changes on the platform side.
+
+  Finalizer policy:
+    Default (hardDelete = false): no resources-finalizer → ArgoCD prunes the Application
+      object only; user-managed K8s resources are NOT deleted (safe default).
+    Hard delete (hardDelete = true): resources-finalizer added → ArgoCD cascade-deletes
+      all managed K8s resources when the Application is pruned (e.g. after AWAITING_PRUNE
+      removes it from the plugin response). The argocd-platform/deletion-mode: hard label
+      is included so the on-deleted notification payload carries the deletion context.
 */ -}}
 {{- range fromJsonArray .Values.applications }}
 ---
@@ -27,13 +36,21 @@ metadata:
     argocd-platform/resource-type: application
     argocd-platform/partition-number: "{{ $.Values.partitionNumber }}"
     argocd-platform/control-plane: "{{ $.Values.controlPlane }}"
+    {{- if .hardDelete }}
+    argocd-platform/deletion-mode: hard
+    {{- end }}
   annotations:
     notifications.argoproj.io/subscribe.on-sync-succeeded.platform-status: ""
     notifications.argoproj.io/subscribe.on-sync-failed.platform-status: ""
     notifications.argoproj.io/subscribe.on-health-degraded.platform-status: ""
     notifications.argoproj.io/subscribe.on-progressing.platform-status: ""
+    notifications.argoproj.io/subscribe.on-deleted.platform-status: ""
+  {{- if .hardDelete }}
   finalizers:
     - resources-finalizer.argocd.argoproj.io
+  {{- else }}
+  finalizers: []
+  {{- end }}
 spec:
   project: {{ .project }}
   sources: {{ .sources | toJson }}

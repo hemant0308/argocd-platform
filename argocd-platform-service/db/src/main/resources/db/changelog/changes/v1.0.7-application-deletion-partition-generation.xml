@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
+
+    <!--
+        v1.0.7: Add deletion_partition_generation to applications.
+
+        When a HARD_DELETE is initiated, the owning application_partition's generation
+        is atomically incremented and the new value is stored here. The status service
+        uses this to confirm — without a fixed time delay — that the
+        application-partition-{N}-{cp} Application has synced the manifest that
+        carries the resources-finalizer. Only syncs at generation ≥
+        deletion_partition_generation are trusted to have the finalizer in place,
+        making the HARD_DELETE → AWAITING_PRUNE transition race-safe.
+
+        NULL for SOFT_DELETE and active applications (not needed there).
+    -->
+
+    <changeSet id="v1.0.7-1" author="argocd-platform">
+        <addColumn tableName="applications">
+            <column name="deletion_partition_generation" type="BIGINT">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="applications" columnName="deletion_partition_generation"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

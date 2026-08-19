@@ -4,6 +4,7 @@ import com.argocd.platform.api.model.request.ApplicationRequest;
 import com.argocd.platform.api.model.response.ApplicationResponse;
 import com.argocd.platform.api.service.ApplicationService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -46,7 +48,8 @@ public class ApplicationController {
     }
 
     @PutMapping("/{id}")
-    @Operation(summary = "Update an existing application")
+    @Operation(summary = "Update an existing application",
+            description = "Returns 409 if deletion is already in progress for this application.")
     public ResponseEntity<ApplicationResponse> update(
             @PathVariable UUID id,
             @Valid @RequestBody ApplicationRequest request) {
@@ -54,9 +57,25 @@ public class ApplicationController {
     }
 
     @DeleteMapping("/{id}")
-    @Operation(summary = "Delete an application")
-    public ResponseEntity<Void> delete(@PathVariable UUID id) {
-        applicationService.delete(id);
-        return ResponseEntity.noContent().build();
+    @Operation(summary = "Initiate application deletion",
+            description = """
+                    Begins the async deletion state machine. Returns 202 Accepted immediately;
+                    actual deletion completes when the ArgoCD on-deleted notification arrives.
+
+                    - Soft delete (default): removes app from plugin response; ArgoCD prunes the
+                      Application without cascade. No user-managed Kubernetes resources are deleted.
+
+                    - Hard delete (?hardDelete=true): adds the resources-finalizer to the Application
+                      via a two-cycle sync, then prunes with cascade. All Kubernetes resources managed
+                      by this Application are deleted.
+
+                    Returns 409 if deletion is already in progress.
+                    """)
+    public ResponseEntity<Void> delete(
+            @PathVariable UUID id,
+            @Parameter(description = "If true, cascade-delete all Kubernetes resources managed by this application.")
+            @RequestParam(defaultValue = "false") boolean hardDelete) {
+        applicationService.initiateDelete(id, hardDelete);
+        return ResponseEntity.accepted().build();
     }
 }

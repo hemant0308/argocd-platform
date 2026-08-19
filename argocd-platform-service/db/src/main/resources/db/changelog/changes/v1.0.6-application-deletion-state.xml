@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
+
+    <!--
+        Adds a two-column deletion state machine to the applications table.
+
+        deletion_mode drives the plugin generator response and the ArgoCD sync behaviour:
+          - NULL            → active; included in plugin response normally
+          - SOFT_DELETE     → deletion requested; excluded from plugin response;
+                              ArgoCD prunes the Application (no finalizer, no cascade)
+          - HARD_DELETE     → deletion requested with cascade; included in plugin response
+                              with hardDelete=true so ArgoCD syncs the resources-finalizer
+          - AWAITING_PRUNE  → finalizer confirmed synced; excluded from plugin response;
+                              ArgoCD prunes with finalizer, cascading to user resources
+
+        deleted_at marks final completion (both soft and hard delete paths):
+          - Set when the ArgoCD on-deleted notification arrives, or by the scheduler
+            timeout fallback for soft-delete when the notification is missed.
+          - Row is NEVER physically deleted — kept for audit purposes.
+          - All management and plugin APIs filter rows where deleted_at IS NOT NULL.
+    -->
+
+    <changeSet id="v1.0.6-1" author="argocd-platform">
+        <comment>Add deletion_mode for deletion state machine</comment>
+        <addColumn tableName="applications">
+            <column name="deletion_mode" type="VARCHAR(20)">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="v1.0.6-2" author="argocd-platform">
+        <comment>Add deleted_at for soft-tombstone deletion audit trail</comment>
+        <addColumn tableName="applications">
+            <column name="deleted_at" type="TIMESTAMP">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+    </changeSet>
+
+    <changeSet id="v1.0.6-3" author="argocd-platform">
+        <comment>Index for scheduler lookup — findByDeletionModeOlderThan</comment>
+        <createIndex tableName="applications" indexName="idx_applications_deletion_mode_updated_at">
+            <column name="deletion_mode"/>
+            <column name="updated_at"/>
+        </createIndex>
+    </changeSet>
+
+</databaseChangeLog>

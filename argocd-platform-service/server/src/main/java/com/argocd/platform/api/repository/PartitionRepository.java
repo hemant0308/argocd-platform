@@ -186,11 +186,47 @@ public class PartitionRepository {
         return createApplicationPartition();
     }
 
-    private void bumpApplicationPartitionGeneration(UUID partitionId) {
-        dsl.update(APPLICATION_PARTITIONS)
+    /**
+     * Atomically increments {@code application_partitions.generation} by 1 and returns
+     * the new value via PostgreSQL {@code RETURNING}. Used whenever the partition's
+     * desired state changes (app create, update, soft-delete, or hard-delete initiation)
+     * to advance the monotonic version counter carried in the
+     * {@code application-partition-{N}-{cp}} Application's labels.
+     *
+     * <p>For hard-delete: the caller stores the returned value in
+     * {@code applications.deletion_partition_generation} so the status service can
+     * confirm — without a fixed time delay — that the correct generation has been synced.
+     *
+     * @return the new generation value after the increment
+     */
+    public long bumpAndReturnApplicationPartitionGeneration(UUID partitionId) {
+        var record = dsl.update(APPLICATION_PARTITIONS)
                 .set(APPLICATION_PARTITIONS.GENERATION, APPLICATION_PARTITIONS.GENERATION.add(1))
                 .where(APPLICATION_PARTITIONS.ID.eq(partitionId))
-                .execute();
+                .returning(APPLICATION_PARTITIONS.GENERATION)
+                .fetchOne();
+        return record != null ? record.get(APPLICATION_PARTITIONS.GENERATION) : 0L;
+    }
+
+    private void bumpApplicationPartitionGeneration(UUID partitionId) {
+        bumpAndReturnApplicationPartitionGeneration(partitionId);
+    }
+
+    /**
+     * Returns the current generation of an application partition.
+     * Used by the plugin service to include the generation in each
+     * {@code application-groups} response entry so ArgoCD can carry it
+     * as a label on the generated {@code application-partition-{N}-{cp}} Application.
+     *
+     * @return current generation, or 0 if the partition does not exist
+     */
+    @Transactional(readOnly = true)
+    public long findApplicationPartitionGeneration(UUID partitionId) {
+        Long gen = dsl.select(APPLICATION_PARTITIONS.GENERATION)
+                .from(APPLICATION_PARTITIONS)
+                .where(APPLICATION_PARTITIONS.ID.eq(partitionId))
+                .fetchOne(APPLICATION_PARTITIONS.GENERATION);
+        return gen != null ? gen : 0L;
     }
 
     private UUID createApplicationPartition() {
