@@ -40,23 +40,28 @@ notifications:
   # Separate trigger names for cluster vs project partitions allow independent
   # per-type templates and future per-type status logic in the platform service.
   triggers:
+    # app.status guard: status is nil before ArgoCD first processes a new Application.
+    # Without the guard the expr evaluator throws "cannot fetch sync/health from <nil>".
     trigger.on-cluster-partition-synced: |
-      - when: app.status.sync.status == 'Synced' && app.status.health.status == 'Healthy'
+      - when: app.status != nil && app.status.sync != nil && app.status.sync.status == 'Synced' && app.status.health != nil && app.status.health.status == 'Healthy'
         send: [platform-status-update]
     trigger.on-cluster-partition-failed: |
-      - when: app.status.sync.status == 'Failed' || app.status.health.status == 'Degraded'
+      - when: app.status != nil && app.status.sync != nil && app.status.health != nil && (app.status.sync.status == 'Failed' || app.status.health.status == 'Degraded')
         send: [platform-status-update]
     trigger.on-project-partition-synced: |
-      - when: app.status.sync.status == 'Synced' && app.status.health.status == 'Healthy'
+      - when: app.status != nil && app.status.sync != nil && app.status.sync.status == 'Synced' && app.status.health != nil && app.status.health.status == 'Healthy'
         send: [platform-status-update]
     trigger.on-project-partition-failed: |
-      - when: app.status.sync.status == 'Failed' || app.status.health.status == 'Degraded'
+      - when: app.status != nil && app.status.sync != nil && app.status.health != nil && (app.status.sync.status == 'Failed' || app.status.health.status == 'Degraded')
         send: [platform-status-update]
     trigger.on-application-partition-synced: |
-      - when: app.status.sync.status == 'Synced' && app.status.health.status == 'Healthy'
+      - when: app.status != nil && app.status.sync != nil && app.status.sync.status == 'Synced' && app.status.health != nil && app.status.health.status == 'Healthy'
         send: [platform-status-update]
+    # deletionTimestamp is a *metav1.Time pointer; when not set it is nil (not "").
+    # In expr-lang nil != "" evaluates to true, causing this trigger to fire for every
+    # Application on every notification cycle. Use != nil instead.
     trigger.on-deleted: |
-      - when: app.metadata.deletionTimestamp != ""
+      - when: app.metadata.deletionTimestamp != nil
         send: [platform-status-update]
 
   # Identical template body to control-planes/values/default.yaml — reads resource
