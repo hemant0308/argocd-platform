@@ -13,5 +13,10 @@
     <include file="db/changelog/changes/v1.0.5-application-name-unique.xml"/>
     <include file="db/changelog/changes/v1.0.6-application-deletion-state.xml"/>
     <include file="db/changelog/changes/v1.0.7-application-deletion-partition-generation.xml"/>
+    <include file="db/changelog/changes/v1.0.8-application-status-fields.xml"/>
+    <include file="db/changelog/changes/v1.0.9-failover-tables.xml"/>
+    <include file="db/changelog/changes/v1.0.10-failover-cluster-inflight-index.xml"/>
+    <include file="db/changelog/changes/v1.0.11-cp-scoped-cluster-app-partitions.xml"/>
+    <include file="db/changelog/changes/v1.0.12-failover-partition-tracking.xml"/>
 
 </databaseChangeLog>

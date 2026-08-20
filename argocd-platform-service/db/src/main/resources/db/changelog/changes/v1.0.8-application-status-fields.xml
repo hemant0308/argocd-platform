@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
+
+    <!-- =========================================================
+         Add sync_status and health_status to applications.
+
+         status      — whether the ArgoCD Application object was created
+                       on the destination control plane (UNKNOWN → ACTIVE).
+                       Updated when on-application-partition-synced fires
+                       (managed ArgoCD confirms the Application object was
+                       deployed by the application-partition ApplicationSet).
+
+         sync_status — ArgoCD sync state of the Application object on the
+                       control-plane ArgoCD. Updated by on-sync-succeeded
+                       and on-sync-failed notifications from CP ArgoCD.
+                       Values: UNKNOWN | SYNCED | OUT_OF_SYNC | FAILED
+
+         health_status — ArgoCD health state of the Application object on
+                         the control-plane ArgoCD. Updated by
+                         on-sync-succeeded (Healthy), on-health-degraded
+                         (Degraded), and on-progressing (Progressing)
+                         notifications from CP ArgoCD.
+                         Values: UNKNOWN | HEALTHY | DEGRADED | PROGRESSING
+         ========================================================= -->
+    <changeSet id="v1.0.8-add-application-sync-status" author="argocd-platform">
+        <addColumn tableName="applications">
+            <column name="sync_status" type="VARCHAR(50)" defaultValue="UNKNOWN">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <addColumn tableName="applications">
+            <column name="health_status" type="VARCHAR(50)" defaultValue="UNKNOWN">
+                <constraints nullable="false"/>
+            </column>
+        </addColumn>
+        <rollback>
+            <dropColumn tableName="applications" columnName="sync_status"/>
+            <dropColumn tableName="applications" columnName="health_status"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.8-add-application-status-indexes" author="argocd-platform">
+        <createIndex indexName="idx_applications_sync_status" tableName="applications">
+            <column name="sync_status"/>
+        </createIndex>
+        <createIndex indexName="idx_applications_health_status" tableName="applications">
+            <column name="health_status"/>
+        </createIndex>
+        <rollback>
+            <dropIndex indexName="idx_applications_sync_status" tableName="applications"/>
+            <dropIndex indexName="idx_applications_health_status" tableName="applications"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

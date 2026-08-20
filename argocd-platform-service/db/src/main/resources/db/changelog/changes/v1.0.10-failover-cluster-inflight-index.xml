@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
+
+    <!-- =========================================================
+         Partial unique index on failover_operation_clusters(cluster_id)
+         for rows where status is PENDING or MIGRATED.
+
+         Purpose: Provide a DB-level guarantee that no two concurrent
+         POST /api/v1/failover requests can include the same cluster in
+         two active operations simultaneously.
+
+         The service-level check in FailoverRepository.findInflightClusterIds()
+         handles the common case, but without this index a narrow race window
+         exists between the SELECT and the INSERT under concurrent requests.
+
+         Partial (not full) unique index: allows a cluster to appear in
+         multiple completed operations (CONFIRMED / FAILED), supporting
+         repeated failovers over the cluster's lifetime.
+
+         Postgres partial unique index syntax:
+           CREATE UNIQUE INDEX ... WHERE (status = 'PENDING' OR status = 'MIGRATED')
+         Liquibase renders this via the <sql> tag since Liquibase's <createIndex>
+         does not support WHERE predicates natively across all DB adapters.
+         ========================================================= -->
+    <changeSet id="v1.0.10-failover-cluster-inflight-index" author="argocd-platform">
+        <sql>
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_foc_cluster_inflight
+            ON failover_operation_clusters (cluster_id)
+            WHERE (status = 'PENDING' OR status = 'MIGRATED');
+        </sql>
+
+        <rollback>
+            DROP INDEX IF EXISTS idx_foc_cluster_inflight;
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

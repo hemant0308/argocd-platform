@@ -158,6 +158,88 @@ public class ApplicationRepository {
     }
 
     /**
+     * Updates {@code sync_status} and {@code health_status} for an application by name,
+     * scoped to the control plane that issued the notification.
+     *
+     * <h3>Why CP-scoped?</h3>
+     * During a failover the old control plane still manages the application and continues
+     * to emit sync notifications. Without the CP filter those notifications would update
+     * {@code updated_at}, satisfying the timestamp gate ({@code updated_at > migrated_at})
+     * and causing a false-positive SYNCED/HEALTHY confirmation on the wrong CP.
+     * By joining {@code applications → clusters → control_planes} and filtering on
+     * {@code control_planes.name = controlPlaneName}, notifications from a CP that no
+     * longer owns the application's cluster match zero rows — no false positive.
+     *
+     * <p>Skips applications in a deletion state ({@code deletion_mode IS NOT NULL}) or
+     * already tombstoned ({@code deleted_at IS NOT NULL}).
+     *
+     * <p>Does NOT update {@code applications.status} — that field is owned exclusively
+     * by the {@code application-partition} sync event path
+     * ({@link #updateStatusByPartitionNumberAndControlPlaneName}).
+     *
+     * @param name             the ArgoCD Application name (unique)
+     * @param controlPlaneName the control-plane name from the notification payload
+     * @param syncStatus       normalised sync state (from {@link com.argocd.platform.api.util.SyncStatus})
+     * @param healthStatus     normalised health state (from {@link com.argocd.platform.api.util.HealthStatus})
+     * @return rows updated (0 if not found, in deletion, or owned by a different CP)
+     */
+    public int updateSyncAndHealthStatusByName(
+            String name, String controlPlaneName, String syncStatus, String healthStatus) {
+        return dsl.update(APPLICATIONS)
+                .set(APPLICATIONS.SYNC_STATUS, syncStatus)
+                .set(APPLICATIONS.HEALTH_STATUS, healthStatus)
+                .set(APPLICATIONS.UPDATED_AT, DSL.currentLocalDateTime())
+                .where(APPLICATIONS.NAME.eq(name))
+                .and(APPLICATIONS.CLUSTER_ID.in(
+                        DSL.select(CLUSTERS.ID)
+                                .from(CLUSTERS)
+                                .join(CONTROL_PLANES).on(CONTROL_PLANES.ID.eq(CLUSTERS.CONTROL_PLANE_ID))
+                                .where(CONTROL_PLANES.NAME.eq(controlPlaneName))))
+                .and(APPLICATIONS.DELETION_MODE.isNull())
+                .and(APPLICATIONS.DELETED_AT.isNull())
+                .execute();
+    }
+
+    /**
+     * Sets {@code status = ACTIVE} for all non-deleting applications that belong to
+     * the given partition and whose cluster is assigned to the named control plane.
+     *
+     * <h3>Purpose</h3>
+     * Called when an {@code on-application-partition-synced} event confirms that the
+     * application-partition ApplicationSet successfully deployed Application objects
+     * to the destination control plane. This is the <em>CREATED</em> confirmation
+     * signal for failover operations: the Application object now exists on the new CP.
+     *
+     * <h3>CP-scoped join</h3>
+     * {@code applications → clusters → control_planes} ensures that only applications
+     * whose cluster currently points to {@code controlPlaneName} are updated — safe
+     * to call even during a failover where some clusters may still be on the source CP.
+     *
+     * @param partitionNumber  the application partition number from the notification
+     * @param controlPlaneName the control-plane name from the notification
+     * @param status           the status to set (typically {@code "ACTIVE"})
+     * @return rows updated (0 if the partition or CP does not exist)
+     */
+    public int updateStatusByPartitionNumberAndControlPlaneName(
+            int partitionNumber, String controlPlaneName, String status) {
+        return dsl.update(APPLICATIONS)
+                .set(APPLICATIONS.STATUS, status)
+                .set(APPLICATIONS.UPDATED_AT, DSL.currentLocalDateTime())
+                .where(APPLICATIONS.APPLICATION_PARTITION_ID.in(
+                        DSL.select(APPLICATION_PARTITIONS.ID)
+                                .from(APPLICATION_PARTITIONS)
+                                .where(APPLICATION_PARTITIONS.PARTITION_NUMBER.eq(partitionNumber))))
+                .and(APPLICATIONS.CLUSTER_ID.in(
+                        DSL.select(CLUSTERS.ID)
+                                .from(CLUSTERS)
+                                .join(CONTROL_PLANES).on(CONTROL_PLANES.ID.eq(CLUSTERS.CONTROL_PLANE_ID))
+                                .where(CONTROL_PLANES.NAME.eq(controlPlaneName))))
+                .and(APPLICATIONS.DELETION_MODE.isNull())
+                .and(APPLICATIONS.DELETED_AT.isNull())
+                .execute();
+    }
+
+    /**
      * Sets {@code deletion_mode} on an application to begin the deletion state machine.
      * Also bumps {@code updated_at} which the scheduler fallback uses as the timeout anchor.
      *
@@ -296,6 +378,45 @@ public class ApplicationRepository {
                         r.get(APPLICATIONS.APPLICATION_PARTITION_ID),
                         r.get(APPLICATIONS.NAME)))
                 .toList();
+    }
+
+    /**
+     * Resets {@code sync_status} and {@code health_status} to {@code UNKNOWN} for all
+     * active (non-deleted, non-deleting) applications whose cluster is in {@code clusterIds}.
+     *
+     * <h3>Why this is needed</h3>
+     * When a cluster's {@code control_plane_id} is updated (failover migration step), the
+     * old control plane continues to emit sync/health notifications for a brief overlap
+     * period. Without a reset, the old status values could satisfy the success condition
+     * and falsely confirm the cluster. Resetting to {@code UNKNOWN} ensures:
+     * <ul>
+     *   <li>the {@code sync_status}/{@code health_status} fields do not carry stale values
+     *       from the source CP, and</li>
+     *   <li>the timestamp gate ({@code applications.updated_at > migrated_at}) fires correctly
+     *       because both this reset and {@code migrated_at} use {@code CURRENT_TIMESTAMP}
+     *       within the same transaction — making them equal — so the gate is {@code false}
+     *       until a real ArgoCD event from the <em>target</em> CP arrives.</li>
+     * </ul>
+     *
+     * <p>Skips applications that are being deleted ({@code deletion_mode IS NOT NULL}) or
+     * already tombstoned ({@code deleted_at IS NOT NULL}) — their status does not matter
+     * for confirmation.
+     *
+     * @param clusterIds list of cluster IDs whose applications should be reset
+     * @return number of application rows updated
+     */
+    public int resetSyncAndHealthStatusForClusters(List<UUID> clusterIds) {
+        if (clusterIds == null || clusterIds.isEmpty()) {
+            return 0;
+        }
+        return dsl.update(APPLICATIONS)
+                .set(APPLICATIONS.SYNC_STATUS, "UNKNOWN")
+                .set(APPLICATIONS.HEALTH_STATUS, "UNKNOWN")
+                .set(APPLICATIONS.UPDATED_AT, DSL.currentLocalDateTime())
+                .where(APPLICATIONS.CLUSTER_ID.in(clusterIds))
+                .and(APPLICATIONS.DELETION_MODE.isNull())
+                .and(APPLICATIONS.DELETED_AT.isNull())
+                .execute();
     }
 
     /**

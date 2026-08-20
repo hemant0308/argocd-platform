@@ -1915,6 +1915,40 @@ The platform service should not rely on ArgoCD polling as the primary mechanism 
 
 **Needed:** After any state-mutating write (application registered, cluster reassigned, etc.), the platform service must automatically trigger a reconciliation of only the affected partition — not wait for the next poll cycle. The platform service must be connected to Managed ArgoCD for this purpose. Polling remains as a fallback safety net only.
 
+### Increase requeueAfterSeconds for all ApplicationSet types
+
+Now that the platform has event-driven ArgoCD notifications and cache invalidation with immediate refresh (`ArgoCDRefreshListener`), polling is a safety net only. The current `requeueAfterSeconds` values are too aggressive for steady state.
+
+**Needed:** Increase `requeueAfterSeconds` for all ApplicationSet types (cluster-partition, project-partition, application-partition) in `argocd/managed/values.yaml` to a larger interval (e.g. 5–10 minutes). State changes propagate via the event-driven path; polling catches only missed events and drift.
+
+### Per-CP project status
+
+`projects.status` is a single column shared across all control planes with last-write-wins semantics. If CP-A reports `ACTIVE` and CP-B reports `DEGRADED` shortly after, the project lands in `DEGRADED` globally — even though it is healthy on CP-A.
+
+**Needed:** Introduce a `project_control_plane_statuses` table:
+
+```sql
+CREATE TABLE project_control_plane_statuses (
+  project_id        UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  control_plane_id  UUID NOT NULL REFERENCES control_planes(id) ON DELETE CASCADE,
+  status            VARCHAR(50) NOT NULL DEFAULT 'UNKNOWN',
+  updated_at        TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (project_id, control_plane_id)
+);
+```
+
+Each CP maintains an independent status row. The management API can then expose per-CP project health, and the failover confirmation path can verify that a project is `ACTIVE` on the new CP specifically rather than relying on the global single-field value.
+
+See inline `TODO` comment in `ProjectRepository.java` for schema sketch.
+
+### Failover retry — active ArgoCD status reconciliation
+
+When `/api/v1/failover/{id}/retry` is called on a `TIMED_OUT` operation, the platform currently only resets the timeout and re-checks DB state. If ArgoCD missed sending a notification, the DB state is stale and retry cannot recover without manual intervention.
+
+**Needed:** On retry, the platform service must actively query the ArgoCD API (managed ArgoCD for `application.status`; CP ArgoCD for `sync_status` / `health_status`) for all applications belonging to MIGRATED clusters in the current batch, update the DB directly, and then let the scheduler re-evaluate the confirmation condition. This makes retry a reliable escape hatch for missed notification events.
+
+Depends on: ArgoCD API client integration (currently the platform service triggers refreshes via ArgoCD Application patch but does not read Application status from ArgoCD).
+
 ---
 
 ## 32.4 Partition Lifecycle
@@ -2098,3 +2132,28 @@ Users may provide additional AppProject spec fields via the platform API. The me
 - The plugin service merges `spec` with platform defaults when building the `project-groups` response.
 
 **Discussion deferred:** exact merge rules, which fields are user-overridable vs platform-only, and how to surface spec validation errors to the caller are to be designed separately.
+
+---
+
+## 32.14 Application Deletion State Machine
+
+> **Status: ✅ Completed** — A two-mode deletion state machine governs safe removal of applications from the platform and their corresponding ArgoCD Application resources on control planes.
+
+### State machine
+
+```
+null  ──SOFT_DELETE──►  deletion_mode = SOFT_DELETE  ──markDeleted──►  deleted_at = now, deletion_mode = null
+null  ──HARD_DELETE──►  deletion_mode = HARD_DELETE  ──partition sync──►  deletion_mode = AWAITING_PRUNE  ──markDeleted──►  deleted_at = now, deletion_mode = null
+```
+
+**SOFT_DELETE:** The platform sets `deletion_mode = SOFT_DELETE`. The application is immediately excluded from the `application-groups` plugin response, so on the next ApplicationSet reconcile ArgoCD prunes the Application object from the control plane. No K8s resources managed by the Application are deleted. The `on-deleted` notification fires when ArgoCD sets `deletionTimestamp`; the platform callback sets `deleted_at`.
+
+**HARD_DELETE:** The platform sets `deletion_mode = HARD_DELETE` and bumps `deletion_partition_generation`. The `application-groups` plugin response now includes `hardDelete: true` for this application, which causes the `application-registration` chart to render `resources-finalizer.argocd.argoproj.io` on the Application manifest. The `on-application-partition-synced` trigger fires once per unique generation value (via `oncePer: app.metadata.labels["argocd-platform/generation"]`), confirming the finalizer-bearing manifest was synced. The platform callback advances `deletion_mode` to `AWAITING_PRUNE`. The application is then excluded from the next plugin response; ArgoCD cascade-deletes all managed K8s resources via the finalizer before pruning the Application object. `on-deleted` fires; the platform sets `deleted_at`.
+
+### ApplicationSet pruning fixes
+
+- **`finalizers: []` OutOfSync diff fixed** — The `application-registration` chart previously rendered an explicit `finalizers: []` in the non-hard-delete branch, causing a persistent ArgoCD OutOfSync diff vs live resources that carry no `finalizers` key. The `{{- else }}` branch was removed; the field is only rendered when `hardDelete: true`.
+- **ArgoCD notification nil guards** — All trigger `when` conditions guard against `app.status == nil` and field-level nils to prevent `"cannot fetch sync/health from <nil>"` evaluator errors for newly created Applications.
+- **`deletionTimestamp` template fix** — The `platform-status-update` webhook template wraps `{{.app.metadata.deletionTimestamp}}` in `{{if ...}}...{{end}}` to prevent Go template rendering `"<no value>"` for unset pointer fields, which previously caused every sync notification to be misidentified as a deletion event.
+- **`on-deleted` trigger nil guard** — Changed condition from `!= ""` to `!= nil`; in expr-lang `nil != ""` evaluates to `true`, which caused the trigger to fire for every application on every notification cycle.
+- **`oncePer` for generation-based deduplication** — ArgoCD deduplicates notifications by Git revision fingerprint. Adding `oncePer: app.metadata.labels["argocd-platform/generation"]` ensures the `on-application-partition-synced` trigger fires once per partition generation change, not once ever — required for the HARD_DELETE event-driven flow to work across multiple deletions without a forced re-sync.

@@ -56,9 +56,9 @@ public class ProjectService {
         // Resolve cluster IDs from references (id takes precedence over name)
         List<UUID> clusterIds = resolveClusterIds(request.getClusters());
 
-        // Resolve (or create) a stable project partition
-        UUID partitionId = partitionService.resolvePartitionId(
-                PartitionType.PROJECT, partitionProperties.getProjectTargetSize());
+        // Resolve (or create) a stable project partition (project partitions remain global)
+        UUID partitionId = partitionService.resolveProjectPartitionId(
+                partitionProperties.getProjectTargetSize());
 
         UUID createdBy = request.getCreatedBy() != null
                 ? request.getCreatedBy() : DEFAULT_CREATED_BY;

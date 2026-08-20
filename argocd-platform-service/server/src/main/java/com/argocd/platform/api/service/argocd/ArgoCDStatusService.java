@@ -6,8 +6,10 @@ import com.argocd.platform.api.repository.ApplicationRepository;
 import com.argocd.platform.api.repository.ClusterRepository;
 import com.argocd.platform.api.repository.ProjectRepository;
 import com.argocd.platform.api.util.DeletionMode;
+import com.argocd.platform.api.util.HealthStatus;
 import com.argocd.platform.api.util.PartitionType;
 import com.argocd.platform.api.util.ResourceStatus;
+import com.argocd.platform.api.util.SyncStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -25,9 +27,14 @@ import java.util.List;
  * {@code argocd-platform/resource-type} label. All DB writes are single-query
  * operations — no pre-lookup of UUIDs is required by this service.
  *
- * <h3>Status derivation</h3>
+ * <h3>Status derivation (clusters and projects only)</h3>
+ * <p>Clusters and projects use a composite {@link ResourceStatus} derived from the ArgoCD
+ * sync+health pair. Applications use a different model: {@code applications.status} is set
+ * to {@code ACTIVE} by the {@code application-partition} event path when the Application
+ * object is created on the CP; {@code sync_status} and {@code health_status} are updated
+ * independently by {@code application} events.
  * <table border="1">
- *   <tr><th>syncStatus</th><th>healthStatus</th><th>DB status</th></tr>
+ *   <tr><th>syncStatus</th><th>healthStatus</th><th>DB status (cluster/project)</th></tr>
  *   <tr><td>Synced</td><td>Healthy</td><td>ACTIVE</td></tr>
  *   <tr><td>*</td><td>Progressing</td><td>SYNCING</td></tr>
  *   <tr><td>*</td><td>Degraded</td><td>DEGRADED</td></tr>
@@ -86,18 +93,22 @@ public class ArgoCDStatusService {
                 }
             }
             case "project" -> {
-                int rows = projectRepository.updateStatusByPartitionNumber(
+                // CP-scoped: only update projects that have ≥1 cluster on this CP.
+                // Without the CP filter, a sync event from CP-X would overwrite the
+                // status of projects that have no clusters on CP-X (not deployed there).
+                int rows = projectRepository.updateStatusByPartitionNumberAndControlPlaneName(
                         parsePartitionNumber(request.getPartitionNumber()),
+                        request.getControlPlane(),
                         status);
                 if (rows == 0) {
-                    log.warn("No projects found for partition={}; status event ignored",
-                            request.getPartitionNumber());
+                    log.warn("No projects found for partition={} cp='{}'; status event ignored",
+                            request.getPartitionNumber(), request.getControlPlane());
                 } else {
-                    log.info("Updated status={} for {} project(s) in partition={} (last-write-wins)",
-                            status, rows, request.getPartitionNumber());
+                    log.info("Updated status={} for {} project(s) in partition={} cp='{}' (last-write-wins)",
+                            status, rows, request.getPartitionNumber(), request.getControlPlane());
                 }
             }
-            case "application" -> processApplicationEvent(request, status);
+            case "application" -> processApplicationEvent(request);
             case "application-partition" -> processApplicationPartitionEvent(request);
             default -> log.warn("Unknown resourceType='{}' for application '{}'; status event ignored",
                     request.getResourceType(), request.getApplicationName());
@@ -207,6 +218,18 @@ public class ArgoCDStatusService {
                           "(concurrent modification or scheduler beat us)", c.name(), c.id());
             }
         }
+
+        // Mark all non-deleting applications in this partition on this CP as ACTIVE.
+        // This is the "CREATED" confirmation signal for failover operations: the
+        // application-partition ApplicationSet successfully deployed the Application
+        // objects to this control plane, so the resource exists on the destination.
+        int activatedRows = applicationRepository.updateStatusByPartitionNumberAndControlPlaneName(
+                partitionNumber, controlPlane, ResourceStatus.ACTIVE.name());
+        if (activatedRows > 0) {
+            log.debug("application-partition sync (partition={}, cp='{}'): " +
+                      "marked {} application(s) ACTIVE (CREATED confirmation)",
+                    partitionNumber, controlPlane, activatedRows);
+        }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -221,11 +244,19 @@ public class ArgoCDStatusService {
      *       Mark the application as deleted (soft-tombstone) regardless of deletion mode.
      *       Handles both soft-delete (no finalizer, immediate) and hard-delete (finalizer
      *       removed after cascade cleanup) completion paths.</li>
-     *   <li>Otherwise: normal sync/health status update. Skips apps in deletion state
-     *       (updateStatusByName guards on {@code deletion_mode IS NULL AND deleted_at IS NULL}).</li>
+     *   <li>Otherwise: raw sync and health state are persisted to {@code sync_status} and
+     *       {@code health_status} respectively. The update is scoped to the control plane
+     *       in the notification payload — notifications from a CP that no longer owns the
+     *       application's cluster (e.g. after failover) match zero rows and are silently
+     *       ignored, preventing timestamp-gate false positives.</li>
      * </ul>
+     *
+     * <p>Note: {@code applications.status} (ACTIVE/UNKNOWN/…) is NOT updated here.
+     * That field is owned by the {@code application-partition} sync path — it is set
+     * to {@code ACTIVE} when the managed ArgoCD confirms the Application object was
+     * deployed to the control plane.
      */
-    private void processApplicationEvent(ArgoCDStatusRequest request, String status) {
+    private void processApplicationEvent(ArgoCDStatusRequest request) {
         String deletionTimestamp = request.getDeletionTimestamp();
 
         if (deletionTimestamp != null && !deletionTimestamp.isBlank()) {
@@ -242,15 +273,24 @@ public class ArgoCDStatusService {
                         deletionTimestamp);
             }
         } else {
-            // Normal sync/health event.
-            // updateStatusByName skips apps in deletion state (guards on deletion_mode IS NULL AND deleted_at IS NULL).
-            int rows = applicationRepository.updateStatusByName(request.getApplicationName(), status);
+            // Normal sync/health event: persist raw ArgoCD state to sync_status and health_status.
+            // CP-scoped so that post-failover notifications from the old CP are silently ignored
+            // (the application's cluster now points to the new CP → 0 rows matched).
+            String syncStatus   = SyncStatus.fromArgoCD(request.getSyncStatus()).name();
+            String healthStatus = HealthStatus.fromArgoCD(request.getHealthStatus()).name();
+
+            int rows = applicationRepository.updateSyncAndHealthStatusByName(
+                    request.getApplicationName(),
+                    request.getControlPlane(),
+                    syncStatus,
+                    healthStatus);
             if (rows == 0) {
-                log.warn("Application '{}' not found or in deletion state; status event ignored",
-                        request.getApplicationName());
+                log.warn("Application '{}' not found, in deletion state, or owned by a different CP (cp='{}'); " +
+                         "sync/health event ignored",
+                        request.getApplicationName(), request.getControlPlane());
             } else {
-                log.info("Updated status={} for application '{}' ({} row(s))",
-                        status, request.getApplicationName(), rows);
+                log.info("Updated syncStatus={} healthStatus={} for application '{}' on cp='{}' ({} row(s))",
+                        syncStatus, healthStatus, request.getApplicationName(), request.getControlPlane(), rows);
             }
         }
     }
@@ -260,10 +300,13 @@ public class ArgoCDStatusService {
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * Maps ArgoCD sync + health status pair to a {@link ResourceStatus}.
+     * Maps an ArgoCD sync + health status pair to a composite {@link ResourceStatus}.
+     * Used for <strong>clusters and projects only</strong> — applications persist the
+     * raw {@code sync_status} and {@code health_status} fields directly via
+     * {@link ApplicationRepository#updateSyncAndHealthStatusByName}.
      *
      * <p>Evaluation order matters — Progressing is checked before the sync status
-     * so that an OutOfSync+Progressing app is reported as SYNCING rather than UNKNOWN.
+     * so that an OutOfSync+Progressing resource is reported as SYNCING rather than UNKNOWN.
      */
     static String deriveStatus(String syncStatus, String healthStatus) {
         if ("Synced".equals(syncStatus) && "Healthy".equals(healthStatus)) {

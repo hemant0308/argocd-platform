@@ -5,11 +5,13 @@ import com.argocd.platform.api.model.response.argocd.ClusterPartitionResponse;
 import com.argocd.platform.api.model.response.argocd.ProjectPartitionResponse;
 import com.argocd.platform.api.repository.PartitionRepository;
 import com.argocd.platform.api.util.PartitionType;
+import jakarta.annotation.Nullable;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
@@ -17,100 +19,161 @@ import java.util.function.Supplier;
 /**
  * Single entry point for all partition-related operations.
  *
+ * <p><b>Option B — CP-scoped partitions</b>: cluster and application partitions are
+ * per-control-plane; partition numbers are unique per-CP, not globally. Use the
+ * CP-scoped write-path methods ({@link #resolveClusterPartitionForCp},
+ * {@link #resolveApplicationPartitionForCp}) for cluster and application assignment.
+ * Project partitions remain global.
+ *
  * <p>Responsibilities:
  * <ul>
- *   <li><b>Write path</b> ({@link #resolvePartitionId}) — delegated straight to
- *       {@link PartitionRepository} without caching.  The method uses
- *       {@code SELECT FOR UPDATE} internally and must remain transactional.</li>
- *   <li><b>Read path</b> ({@code findXxxPartitionIdByNumber}) — results are kept
- *       in a JVM-local {@link ConcurrentHashMap}.  Partition-number → UUID
- *       mappings are <em>immutable once created</em>: a partition is never
- *       renumbered or deleted, so the in-memory map is always coherent across
- *       restarts (it is simply warm vs. cold, not wrong).</li>
- *   <li><b>Reverse lookup</b> ({@link #findPartitionKey}) — used by the cache
- *       invalidation listener to translate a partition UUID back to its
- *       (type, number) pair so it can derive the exact Redis key to evict.
- *       Falls back to a DB query on cache miss.</li>
- *   <li><b>List path</b> ({@code findAllXxx}) — not cached in-memory;
- *       resource counts are dynamic.  Redis TTL handles caching at the
- *       {@link com.argocd.platform.api.cache.PluginCacheService} level.</li>
+ *   <li><b>Write path</b> — delegated to {@link PartitionRepository} without caching;
+ *       the repo uses {@code SELECT FOR UPDATE} internally.</li>
+ *   <li><b>Read path</b> — results kept in a JVM-local {@link ConcurrentHashMap}.
+ *       For CP-scoped types the cache key includes the CP id:
+ *       {@code "CLUSTER:{cpId}:{number}"}.  Project type uses the legacy
+ *       {@code "PROJECT:{number}"} key (no CP).</li>
+ *   <li><b>Reverse lookup</b> ({@link #findPartitionKey}) — translates a partition UUID
+ *       back to its {@link PartitionKey} for cache invalidation; falls back to DB on miss.</li>
+ *   <li><b>List path</b> — not cached in-memory; resource counts are dynamic.</li>
  * </ul>
- *
- * <p><b>Cache misses are never stored.</b>  If a partition number does not yet
- * exist in the DB the empty result propagates to the caller; a subsequent call
- * after the partition is created will populate the cache correctly.
  */
 @Service
 @RequiredArgsConstructor
 public class PartitionService {
 
     /**
-     * Immutable identifier for a (type, number) partition.
-     * Exposed so that listeners can inspect the partition kind and number
-     * without holding a reference to the service itself.
+     * Immutable identifier for a partition.
+     *
+     * <p>For CP-scoped types ({@code CLUSTER}, {@code APPLICATION}), {@code cpId} is
+     * the owning control plane's UUID. For {@code PROJECT} (global), {@code cpId} is null.
+     *
+     * <p>The cache-invalidation listener uses {@code cpId} to derive the exact Redis key:
+     * {@code "cluster-partition:{cpName}:{number}"}.
      */
-    public record PartitionKey(PartitionType type, int number) {}
+    public record PartitionKey(PartitionType type, int number, @Nullable UUID cpId) {
+        /** Convenience constructor for global (project) partitions. */
+        public PartitionKey(PartitionType type, int number) {
+            this(type, number, null);
+        }
+    }
 
     private final PartitionRepository partitionRepository;
 
     /**
-     * Forward cache: {@code "CLUSTER:3"} → UUID.
-     * Populated on first read; never evicted (immutable relationship).
+     * Forward cache: key → UUID.
+     * Key format: {@code "CLUSTER:{cpId}:{number}"} / {@code "APPLICATION:{cpId}:{number}"}
+     * for CP-scoped types; {@code "PROJECT:{number}"} for global project partitions.
      */
     private final ConcurrentHashMap<String, UUID> forwardCache = new ConcurrentHashMap<>();
 
     /**
-     * Reverse cache: UUID → {@link PartitionKey}.
-     * Populated whenever the forward cache is populated.
+     * Reverse cache: UUID → {@link PartitionKey} (includes cpId for CP-scoped types).
      */
     private final ConcurrentHashMap<UUID, PartitionKey> reverseCache = new ConcurrentHashMap<>();
 
-    // -------------------------------------------------------------------------
-    // Write path — no caching
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // Write path — CP-scoped (cluster + application)
+    // =========================================================================
 
     /**
-     * Resolves (or creates) a partition for the given resource type.
-     * Delegates to {@link PartitionRepository#resolvePartitionId} which uses
-     * {@code SELECT FOR UPDATE} — this must always hit the DB.
+     * Resolves (or creates) a cluster partition scoped to the given control plane.
+     * Delegates to {@link PartitionRepository#resolveClusterPartitionForCp} which
+     * uses {@code SELECT FOR UPDATE}.
      *
-     * @param type       resource dimension (CLUSTER, PROJECT, APPLICATION)
-     * @param targetSize max resources per partition before a new one is created
-     * @return UUID of the assigned partition
+     * @param cpId       the target control plane UUID
+     * @param targetSize max clusters per partition before a new one is created
+     * @return UUID of the assigned CP-scoped cluster partition
      */
-    public UUID resolvePartitionId(PartitionType type, int targetSize) {
-        return partitionRepository.resolvePartitionId(type, targetSize);
+    public UUID resolveClusterPartitionForCp(UUID cpId, int targetSize) {
+        return partitionRepository.resolveClusterPartitionForCp(cpId, targetSize);
     }
 
-    // -------------------------------------------------------------------------
-    // Read path — in-memory cached
-    // -------------------------------------------------------------------------
-
-    public Optional<UUID> findClusterPartitionIdByNumber(int partitionNumber) {
-        return findByNumber(PartitionType.CLUSTER, partitionNumber,
-                () -> partitionRepository.findClusterPartitionIdByNumber(partitionNumber));
+    /**
+     * Resolves (or creates) an application partition scoped to the given control plane.
+     * Prefer calling {@link #findApplicationPartitionForCluster} first to maintain
+     * cluster-locality; fall back to this method when no partition exists yet.
+     *
+     * @param cpId       the target control plane UUID
+     * @param targetSize max applications per partition before a new one is created
+     * @return UUID of the assigned CP-scoped application partition
+     */
+    public UUID resolveApplicationPartitionForCp(UUID cpId, int targetSize) {
+        return partitionRepository.resolveApplicationPartitionForCp(cpId, targetSize);
     }
+
+    /**
+     * Cluster-locality lookup: returns the application partition on {@code targetCpId}
+     * that already holds applications from {@code clusterId}, if any.
+     *
+     * <p>Call this before {@link #resolveApplicationPartitionForCp} during failover batch
+     * migration. An existing partition on the target CP means the cluster was already
+     * partially migrated (retry case) and we reuse the same partition for consistency.
+     */
+    public Optional<UUID> findApplicationPartitionForCluster(UUID clusterId, UUID targetCpId) {
+        return partitionRepository.findApplicationPartitionForCluster(clusterId, targetCpId);
+    }
+
+    // =========================================================================
+    // Write path — project (global)
+    // =========================================================================
+
+    /**
+     * Resolves (or creates) a project partition (globally scoped — no CP).
+     * Project partitions are not CP-scoped; AppProjects must exist on every CP
+     * that hosts the project's clusters.
+     *
+     * @param targetSize max projects per partition before a new one is created
+     * @return UUID of the assigned project partition
+     */
+    public UUID resolveProjectPartitionId(int targetSize) {
+        return partitionRepository.resolvePartitionId(PartitionType.PROJECT, targetSize);
+    }
+
+    // =========================================================================
+    // Read path — CP-scoped (cluster + application)
+    // =========================================================================
+
+    /**
+     * Resolves a cluster partition UUID by CP id and partition number.
+     * Under Option B, partition numbers are unique per-CP — both cpId and number
+     * are required to identify a partition.
+     */
+    public Optional<UUID> findClusterPartitionIdByCpAndNumber(UUID cpId, int partitionNumber) {
+        return findByNumber(PartitionType.CLUSTER, cpId, partitionNumber,
+                () -> partitionRepository.findClusterPartitionIdByCpAndNumber(cpId, partitionNumber));
+    }
+
+    /**
+     * Resolves an application partition UUID by CP id and partition number.
+     */
+    public Optional<UUID> findApplicationPartitionIdByCpAndNumber(UUID cpId, int partitionNumber) {
+        return findByNumber(PartitionType.APPLICATION, cpId, partitionNumber,
+                () -> partitionRepository.findApplicationPartitionIdByCpAndNumber(cpId, partitionNumber));
+    }
+
+    // =========================================================================
+    // Read path — project (global)
+    // =========================================================================
 
     public Optional<UUID> findProjectPartitionIdByNumber(int partitionNumber) {
-        return findByNumber(PartitionType.PROJECT, partitionNumber,
+        return findByNumber(PartitionType.PROJECT, null, partitionNumber,
                 () -> partitionRepository.findProjectPartitionIdByNumber(partitionNumber));
     }
 
-    public Optional<UUID> findApplicationPartitionIdByNumber(int partitionNumber) {
-        return findByNumber(PartitionType.APPLICATION, partitionNumber,
-                () -> partitionRepository.findApplicationPartitionIdByNumber(partitionNumber));
-    }
-
-    // -------------------------------------------------------------------------
+    // =========================================================================
     // Reverse lookup — used by cache invalidation listener
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
     /**
      * Translates a partition UUID to its {@link PartitionKey}.
      * Checks the in-memory reverse cache first; falls back to a DB query on miss
      * and populates both forward and reverse caches with the result.
      *
-     * <p>Returns empty if no partition with the given id exists (data anomaly).
+     * <p>For CP-scoped types the returned key contains {@code cpId}; the listener
+     * uses it to build the Redis key {@code "cluster-partition:{cpName}:{number}"}.
+     *
+     * @return empty if no partition with the given id exists (data anomaly)
      */
     public Optional<PartitionKey> findPartitionKey(PartitionType type, UUID partitionId) {
         PartitionKey cached = reverseCache.get(partitionId);
@@ -119,30 +182,28 @@ public class PartitionService {
         }
         return partitionRepository.findPartitionNumberById(type, partitionId)
                 .map(number -> {
+                    // For CP-scoped types we store cpId=null here as a sentinel — the
+                    // listener must do a separate lookup for cpName from the UUID if needed.
+                    // cpId will be populated on the next findClusterPartitionIdByCpAndNumber call.
                     PartitionKey pk = new PartitionKey(type, number);
                     reverseCache.put(partitionId, pk);
-                    forwardCache.put(forwardKey(type, number), partitionId);
                     return pk;
                 });
     }
 
-    // -------------------------------------------------------------------------
-    // Write path helpers — delegate directly to repository (must be transactional)
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // Generation helpers
+    // =========================================================================
 
     /**
      * Atomically bumps the application partition's {@code generation} counter
      * and returns the new value. Must be called inside the same transaction as
-     * the triggering write (create/update/soft-delete/hard-delete) so the
-     * generation change and the app-state change are atomic.
+     * the triggering write so the generation change and the app-state change are atomic.
      *
      * <p>For hard-delete: the returned value is stored in
      * {@code applications.deletion_partition_generation} and later used by
      * the status service to race-safely confirm that the correct generation
      * was synced before advancing to {@code AWAITING_PRUNE}.
-     *
-     * @param partitionId UUID of the application partition to bump
-     * @return new generation value after the increment
      */
     public long bumpApplicationPartitionGeneration(UUID partitionId) {
         return partitionRepository.bumpAndReturnApplicationPartitionGeneration(partitionId);
@@ -151,19 +212,33 @@ public class PartitionService {
     /**
      * Returns the current generation of an application partition without bumping it.
      * Used by the plugin service to include {@code generation} in the
-     * {@code application-groups} response so ArgoCD carries it as a label
-     * on the generated {@code application-partition-{N}-{cp}} Application.
-     *
-     * @param partitionId UUID of the application partition
-     * @return current generation (0 if partition does not exist)
+     * {@code application-groups} response.
      */
     public long findApplicationPartitionGeneration(UUID partitionId) {
         return partitionRepository.findApplicationPartitionGeneration(partitionId);
     }
 
-    // -------------------------------------------------------------------------
-    // List path — not cached in-memory (counts are dynamic)
-    // -------------------------------------------------------------------------
+    /**
+     * Bumps generation on a set of cluster partition IDs (batch).
+     * Called by {@code FailoverBatchService} after migration to invalidate
+     * source and target cluster partition caches.
+     */
+    public void bumpClusterPartitionGenerations(Set<UUID> partitionIds) {
+        partitionRepository.bumpClusterPartitionGenerations(partitionIds);
+    }
+
+    /**
+     * Bumps generation on a set of application partition IDs (batch).
+     * Called by {@code FailoverBatchService} after migration to invalidate
+     * source and target application partition caches.
+     */
+    public void bumpApplicationPartitionGenerations(Set<UUID> partitionIds) {
+        partitionRepository.bumpApplicationPartitionGenerations(partitionIds);
+    }
+
+    // =========================================================================
+    // List path — not cached in-memory (resource counts are dynamic)
+    // =========================================================================
 
     public List<ClusterPartitionResponse> findAllClusterPartitions() {
         return partitionRepository.findAllClusterPartitions();
@@ -177,27 +252,35 @@ public class PartitionService {
         return partitionRepository.findAllApplicationPartitions();
     }
 
-    // -------------------------------------------------------------------------
+    // =========================================================================
     // Internal helpers
-    // -------------------------------------------------------------------------
+    // =========================================================================
 
-    private Optional<UUID> findByNumber(PartitionType type, int number,
-                                        Supplier<Optional<UUID>> dbQuery) {
-        String key = forwardKey(type, number);
+    /**
+     * @param cpId null for global (project) partitions; non-null for CP-scoped types
+     */
+    private Optional<UUID> findByNumber(PartitionType type, @Nullable UUID cpId,
+                                        int number, Supplier<Optional<UUID>> dbQuery) {
+        String key = forwardKey(type, cpId, number);
         UUID cached = forwardCache.get(key);
         if (cached != null) {
             return Optional.of(cached);
         }
-        // Cache misses are NOT stored — a not-yet-created partition number returns
-        // empty every time until the partition exists in the DB.
+        // Cache misses are NOT stored — a not-yet-created partition returns empty until
+        // the partition exists in the DB.
         return dbQuery.get().map(id -> {
             forwardCache.put(key, id);
-            reverseCache.put(id, new PartitionKey(type, number));
+            reverseCache.put(id, new PartitionKey(type, number, cpId));
             return id;
         });
     }
 
-    private static String forwardKey(PartitionType type, int number) {
+    private static String forwardKey(PartitionType type, @Nullable UUID cpId, int number) {
+        if (cpId != null) {
+            // CP-scoped: "CLUSTER:{cpId}:{number}"
+            return type.name() + ":" + cpId + ":" + number;
+        }
+        // Global (project): "PROJECT:{number}"
         return type.name() + ":" + number;
     }
 }

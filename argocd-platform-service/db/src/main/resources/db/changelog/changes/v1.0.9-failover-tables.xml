@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
+
+    <!-- =========================================================
+         failover_operations
+         One row per POST /api/v1/failover call.
+         Tracks the overall state of the failover: which CP is the
+         target, how many clusters are being moved, which batch we
+         are on, and the caller-defined success condition.
+
+         status lifecycle:
+           PENDING                      — created, scheduler not yet picked up
+           AWAITING_BATCH_CONFIRMATION  — current batch executed; waiting for
+                                          ArgoCD confirmation events
+           COMPLETED                   — all batches confirmed
+           TIMED_OUT                   — current batch did not confirm within
+                                          batch_timeout_seconds; recoverable via
+                                          /retry or /rollback
+           CANCELLED                   — caller called /cancel; stops after
+                                          current batch; not rolled back
+           FAILED                      — hard error (invalid CP, DB failure);
+                                          not recoverable automatically
+         ========================================================= -->
+    <changeSet id="v1.0.9-create-failover-operations" author="argocd-platform">
+        <createTable tableName="failover_operations"
+                     remarks="Tracks a controlled cluster failover operation end-to-end">
+
+            <column name="id" type="UUID" defaultValueComputed="uuid_generate_v4()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+
+            <!-- Where all selected clusters are moving TO. Never changes after creation. -->
+            <column name="target_control_plane_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Overall operation state (see lifecycle above). -->
+            <column name="status" type="VARCHAR(50)" defaultValue="PENDING">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Total clusters matched by the filter at creation time. Never changes. -->
+            <column name="total_clusters" type="INTEGER">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Number of clusters that reached CONFIRMED state. Incremented per batch. -->
+            <column name="completed_clusters" type="INTEGER" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Which batch the operation is currently processing (1-indexed). -->
+            <column name="current_batch" type="INTEGER" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- CEIL(total_clusters / batch_size). Set at creation; never changes. -->
+            <column name="total_batches" type="INTEGER">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Clusters per batch from the request. NULL means all clusters in one batch. -->
+            <column name="batch_size" type="INTEGER">
+                <constraints nullable="true"/>
+            </column>
+
+            <!-- What must be true for every application on a cluster to count it as confirmed.
+                 CREATED  — Application object exists on new CP (application-partition synced).
+                 SYNCED   — applications.sync_status = SYNCED on new CP.
+                 HEALTHY  — applications.health_status = HEALTHY on new CP. -->
+            <column name="success_condition" type="VARCHAR(20)" defaultValue="SYNCED">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- If true the operation resolved the filter and planned batches but executed nothing. -->
+            <column name="dry_run" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- How long (seconds) to wait for each batch before transitioning to TIMED_OUT. -->
+            <column name="batch_timeout_seconds" type="INTEGER" defaultValueNumeric="600">
+                <constraints nullable="false"/>
+            </column>
+
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+        </createTable>
+
+        <addForeignKeyConstraint
+                baseTableName="failover_operations"
+                baseColumnNames="target_control_plane_id"
+                referencedTableName="control_planes"
+                referencedColumnNames="id"
+                constraintName="fk_failover_operations_target_cp"/>
+
+        <createIndex indexName="idx_failover_operations_status" tableName="failover_operations">
+            <column name="status"/>
+        </createIndex>
+
+        <createIndex indexName="idx_failover_operations_target_cp" tableName="failover_operations">
+            <column name="target_control_plane_id"/>
+        </createIndex>
+
+        <rollback>
+            <dropTable tableName="failover_operations"/>
+        </rollback>
+    </changeSet>
+
+    <!-- =========================================================
+         failover_operation_clusters
+         One row per cluster per operation.
+         Tracks the per-cluster migration state and captures the
+         source CP at operation creation time (needed for rollback).
+
+         status lifecycle:
+           PENDING    — assigned to a future batch; not yet migrated
+           MIGRATED   — clusters.control_plane_id updated to target CP;
+                        statuses reset to UNKNOWN; waiting for confirmation
+           CONFIRMED  — success condition met (all apps on this cluster
+                        satisfy successCondition AND updated_at > migrated_at)
+           FAILED     — batch timed out while this cluster was MIGRATED
+         ========================================================= -->
+    <changeSet id="v1.0.9-create-failover-operation-clusters" author="argocd-platform">
+        <createTable tableName="failover_operation_clusters"
+                     remarks="Per-cluster detail rows for a failover_operation">
+
+            <column name="operation_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+
+            <column name="cluster_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Which batch this cluster belongs to (1-indexed). Set at creation; never changes. -->
+            <column name="batch_number" type="INTEGER">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- The CP this cluster was on when the operation was created.
+                 Used for rollback (where to send the cluster back to) and audit. -->
+            <column name="source_control_plane_id" type="UUID">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- Per-cluster migration state (see lifecycle above). -->
+            <column name="status" type="VARCHAR(50)" defaultValue="PENDING">
+                <constraints nullable="false"/>
+            </column>
+
+            <!-- When clusters.control_plane_id was updated for this cluster.
+                 This is the timestamp gate: any application status update must have
+                 updated_at > migrated_at to count as confirmation. -->
+            <column name="migrated_at" type="TIMESTAMP">
+                <constraints nullable="true"/>
+            </column>
+
+            <!-- When the success condition was satisfied for this cluster. -->
+            <column name="confirmed_at" type="TIMESTAMP">
+                <constraints nullable="true"/>
+            </column>
+        </createTable>
+
+        <addPrimaryKey
+                tableName="failover_operation_clusters"
+                columnNames="operation_id, cluster_id"
+                constraintName="pk_failover_operation_clusters"/>
+
+        <addForeignKeyConstraint
+                baseTableName="failover_operation_clusters"
+                baseColumnNames="operation_id"
+                referencedTableName="failover_operations"
+                referencedColumnNames="id"
+                constraintName="fk_foc_operation"
+                onDelete="CASCADE"/>
+
+        <addForeignKeyConstraint
+                baseTableName="failover_operation_clusters"
+                baseColumnNames="cluster_id"
+                referencedTableName="clusters"
+                referencedColumnNames="id"
+                constraintName="fk_foc_cluster"/>
+
+        <addForeignKeyConstraint
+                baseTableName="failover_operation_clusters"
+                baseColumnNames="source_control_plane_id"
+                referencedTableName="control_planes"
+                referencedColumnNames="id"
+                constraintName="fk_foc_source_cp"/>
+
+        <createIndex indexName="idx_foc_operation_batch" tableName="failover_operation_clusters">
+            <column name="operation_id"/>
+            <column name="batch_number"/>
+        </createIndex>
+
+        <createIndex indexName="idx_foc_status" tableName="failover_operation_clusters">
+            <column name="status"/>
+        </createIndex>
+
+        <createIndex indexName="idx_foc_cluster_id" tableName="failover_operation_clusters">
+            <column name="cluster_id"/>
+        </createIndex>
+
+        <rollback>
+            <dropTable tableName="failover_operation_clusters"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

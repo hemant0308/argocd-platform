@@ -22,10 +22,13 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: application-partition-{{ .Values.partitionNumber }}
+  # Include cpName so two CPs with the same partitionNumber don't collide.
+  # Matches the Application name pattern in argocd/managed/templates/applicationsets/application-partitions.yaml.
+  name: application-partition-{{ .Values.partitionNumber }}-{{ .Values.cpName }}
   namespace: argocd
   annotations:
     argocd-platform/partition-number: "{{ .Values.partitionNumber }}"
+    argocd-platform/cp-name: "{{ .Values.cpName }}"
     argocd-platform/generation: "{{ .Values.generation }}"
 
 spec:
@@ -40,6 +43,8 @@ spec:
           parameters:
             resource: "application-groups"
             partitionNumber: "{{ .Values.partitionNumber }}"
+            # Required by Option B: the plugin looks up the partition by (partitionNumber, cpName).
+            cpName: "{{ .Values.cpName }}"
 
   template:
     metadata:

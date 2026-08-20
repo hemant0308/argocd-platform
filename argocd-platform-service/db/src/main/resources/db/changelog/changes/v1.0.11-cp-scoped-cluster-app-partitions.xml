@@ -1,0 +1,228 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
+
+    <!-- =========================================================
+         Option B — CP-scoped partition architecture.
+
+         cluster_partitions and application_partitions become
+         per-control-plane; partition_number uniqueness changes from
+         globally unique to (control_plane_id, partition_number).
+
+         Before this migration each partition was shared across all
+         control planes: a single cluster-partition-1 served clusters
+         from CP1, CP2, … etc. That forces a full cache invalidation
+         whenever any cluster changes CP (because the same partition
+         ID appears in every CP's ArgoCD ApplicationSet).
+
+         After this migration each partition belongs to exactly one
+         control plane. A failover that moves 100 clusters from CP1
+         to CP2 invalidates at most 4 partition caches (src/tgt
+         cluster partition + src/tgt application partition) instead
+         of the entire global set.
+
+         project_partitions is intentionally NOT modified — AppProjects
+         must be present on every CP that hosts the project's clusters,
+         so they remain globally partitioned.
+
+         Data migration note:
+           The back-fill SQL assigns control_plane_id by finding the
+           first cluster (or application's cluster) belonging to each
+           partition. On a fresh / empty database this is a no-op.
+           On a database with existing data the query performs a
+           best-effort assignment; partitions that serve clusters from
+           multiple CPs (legacy global partitions) will receive the CP
+           of the first cluster returned — these should be reviewed and
+           split manually before promoting to production.
+           Any partition that cannot be resolved (no clusters / apps
+           pointing to it) is deleted before the NOT NULL constraint is
+           applied so that the constraint does not fail.
+         ========================================================= -->
+
+    <!-- ===================== cluster_partitions ===================== -->
+
+    <changeSet id="v1.0.11-cp-cluster-partitions-add-column" author="argocd-platform">
+        <!-- Step 1: add column nullable to allow back-fill -->
+        <addColumn tableName="cluster_partitions">
+            <column name="control_plane_id" type="UUID">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+
+        <rollback>
+            <dropColumn tableName="cluster_partitions" columnName="control_plane_id"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.11-cp-cluster-partitions-backfill" author="argocd-platform">
+        <!-- Step 2: back-fill control_plane_id from the clusters that
+             reference each partition. Best-effort — see migration note. -->
+        <sql>
+            UPDATE cluster_partitions cp_part
+            SET control_plane_id = (
+                SELECT cl.control_plane_id
+                FROM clusters cl
+                WHERE cl.cluster_partition_id = cp_part.id
+                ORDER BY cl.created_at
+                LIMIT 1
+            )
+            WHERE cp_part.control_plane_id IS NULL;
+        </sql>
+
+        <!-- Step 3: delete orphaned partitions (no clusters assigned) so
+             the NOT NULL constraint below can be applied cleanly. -->
+        <sql>
+            DELETE FROM cluster_partitions
+            WHERE control_plane_id IS NULL;
+        </sql>
+
+        <rollback><!-- data back-fill is not reversible; rollback drops the column --></rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.11-cp-cluster-partitions-not-null" author="argocd-platform">
+        <!-- Step 4: enforce NOT NULL now that every row has a value -->
+        <addNotNullConstraint tableName="cluster_partitions" columnName="control_plane_id"
+                              columnDataType="UUID"/>
+
+        <rollback>
+            <dropNotNullConstraint tableName="cluster_partitions" columnName="control_plane_id"
+                                   columnDataType="UUID"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.11-cp-cluster-partitions-swap-unique" author="argocd-platform">
+        <!-- Step 5: drop old global-unique on partition_number,
+             add composite unique on (control_plane_id, partition_number).
+             Constraint name matches what Liquibase / Postgres auto-generated
+             for the inline unique="true" in the v1.0.0 createTable. -->
+        <sql>
+            ALTER TABLE cluster_partitions
+                DROP CONSTRAINT IF EXISTS cluster_partitions_partition_number_key;
+        </sql>
+
+        <addUniqueConstraint tableName="cluster_partitions"
+                             columnNames="control_plane_id, partition_number"
+                             constraintName="uq_cluster_partitions_cp_number"/>
+
+        <rollback>
+            <dropUniqueConstraint tableName="cluster_partitions"
+                                  constraintName="uq_cluster_partitions_cp_number"/>
+            <addUniqueConstraint tableName="cluster_partitions"
+                                 columnNames="partition_number"
+                                 constraintName="cluster_partitions_partition_number_key"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.11-cp-cluster-partitions-fk-and-index" author="argocd-platform">
+        <!-- Step 6: FK to control_planes + covering index -->
+        <addForeignKeyConstraint
+                baseTableName="cluster_partitions"
+                baseColumnNames="control_plane_id"
+                referencedTableName="control_planes"
+                referencedColumnNames="id"
+                constraintName="fk_cluster_partitions_cp"/>
+
+        <createIndex indexName="idx_cluster_partitions_cp_id" tableName="cluster_partitions">
+            <column name="control_plane_id"/>
+        </createIndex>
+
+        <rollback>
+            <dropIndex tableName="cluster_partitions" indexName="idx_cluster_partitions_cp_id"/>
+            <dropForeignKeyConstraint baseTableName="cluster_partitions"
+                                      constraintName="fk_cluster_partitions_cp"/>
+        </rollback>
+    </changeSet>
+
+    <!-- =================== application_partitions =================== -->
+
+    <changeSet id="v1.0.11-cp-application-partitions-add-column" author="argocd-platform">
+        <addColumn tableName="application_partitions">
+            <column name="control_plane_id" type="UUID">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+
+        <rollback>
+            <dropColumn tableName="application_partitions" columnName="control_plane_id"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.11-cp-application-partitions-backfill" author="argocd-platform">
+        <!-- Back-fill via application → cluster → control_plane chain. -->
+        <sql>
+            UPDATE application_partitions ap_part
+            SET control_plane_id = (
+                SELECT cl.control_plane_id
+                FROM applications a
+                JOIN clusters cl ON cl.id = a.cluster_id
+                WHERE a.application_partition_id = ap_part.id
+                  AND a.deleted_at IS NULL
+                ORDER BY a.created_at
+                LIMIT 1
+            )
+            WHERE ap_part.control_plane_id IS NULL;
+        </sql>
+
+        <!-- Delete application partitions with no active applications. -->
+        <sql>
+            DELETE FROM application_partitions
+            WHERE control_plane_id IS NULL;
+        </sql>
+
+        <rollback><!-- data back-fill is not reversible; rollback drops the column --></rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.11-cp-application-partitions-not-null" author="argocd-platform">
+        <addNotNullConstraint tableName="application_partitions" columnName="control_plane_id"
+                              columnDataType="UUID"/>
+
+        <rollback>
+            <dropNotNullConstraint tableName="application_partitions" columnName="control_plane_id"
+                                   columnDataType="UUID"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.11-cp-application-partitions-swap-unique" author="argocd-platform">
+        <sql>
+            ALTER TABLE application_partitions
+                DROP CONSTRAINT IF EXISTS application_partitions_partition_number_key;
+        </sql>
+
+        <addUniqueConstraint tableName="application_partitions"
+                             columnNames="control_plane_id, partition_number"
+                             constraintName="uq_application_partitions_cp_number"/>
+
+        <rollback>
+            <dropUniqueConstraint tableName="application_partitions"
+                                  constraintName="uq_application_partitions_cp_number"/>
+            <addUniqueConstraint tableName="application_partitions"
+                                 columnNames="partition_number"
+                                 constraintName="application_partitions_partition_number_key"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.11-cp-application-partitions-fk-and-index" author="argocd-platform">
+        <addForeignKeyConstraint
+                baseTableName="application_partitions"
+                baseColumnNames="control_plane_id"
+                referencedTableName="control_planes"
+                referencedColumnNames="id"
+                constraintName="fk_application_partitions_cp"/>
+
+        <createIndex indexName="idx_application_partitions_cp_id" tableName="application_partitions">
+            <column name="control_plane_id"/>
+        </createIndex>
+
+        <rollback>
+            <dropIndex tableName="application_partitions" indexName="idx_application_partitions_cp_id"/>
+            <dropForeignKeyConstraint baseTableName="application_partitions"
+                                      constraintName="fk_application_partitions_cp"/>
+        </rollback>
+    </changeSet>
+
+    <!-- project_partitions: intentionally unchanged (global partitions) -->
+
+</databaseChangeLog>

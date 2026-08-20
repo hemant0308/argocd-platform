@@ -59,9 +59,15 @@ public class ApplicationService {
         // The suffixed name is what ArgoCD sees and what is returned in the response.
         String finalName = request.getName() + "-" + randomSuffix();
 
-        // Resolve (or create) a stable application partition
-        UUID partitionId = partitionService.resolvePartitionId(
-                PartitionType.APPLICATION, partitionProperties.getApplicationTargetSize());
+        // Resolve the cluster's control plane so the application lands in a CP-scoped partition
+        // (cluster-locality: all apps from the same cluster share a partition on the same CP)
+        UUID controlPlaneId = clusterRepository.findById(clusterId)
+                .orElseThrow(() -> new ResourceNotFoundException("Cluster not found: " + clusterId))
+                .getControlPlaneId();
+
+        // Resolve (or create) a CP-scoped application partition (Option B)
+        UUID partitionId = partitionService.resolveApplicationPartitionForCp(
+                controlPlaneId, partitionProperties.getApplicationTargetSize());
 
         ApplicationsEntity entity = new ApplicationsEntity()
                 .setName(finalName)

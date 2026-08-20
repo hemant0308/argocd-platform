@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
+
+    <!-- =========================================================
+         Failover partition tracking columns (Option B).
+
+         Records the source and target partition IDs for each cluster
+         in a failover operation. These values are captured at the
+         moment migrateBatch() executes — before any FK updates —
+         so that /rollback can precisely reverse cluster_partition_id
+         and application_partition_id without guessing.
+
+         source_*_partition_id: the partition the cluster/apps lived
+           in on CP1 at the time of migration (for rollback).
+         target_*_partition_id: the CP2-scoped partition assigned by
+           migrateBatch() (used for audit, targeted cache events,
+           and generation-bump tracking).
+
+         Both columns are nullable:
+           - source_application_partition_id may be NULL if the cluster
+             had no active (non-deleted) applications at migration time.
+           - target_application_partition_id is NULL until migrateBatch()
+             runs; rows start life in PENDING state before that.
+           - source_cluster_partition_id is similarly set lazily.
+
+         FK constraints reference the partition tables (no CASCADE) so
+         that accidental partition deletion is blocked while operation
+         rows reference them. A deliberate cleanup must NULL these
+         columns first.
+         ========================================================= -->
+
+    <changeSet id="v1.0.12-foc-partition-tracking-columns" author="argocd-platform">
+
+        <addColumn tableName="failover_operation_clusters">
+            <!-- The cluster_partitions row the cluster was assigned to on CP1.
+                 Captured before migrateBatch() reassigns cluster_partition_id.
+                 Used by /rollback to restore the FK. -->
+            <column name="source_cluster_partition_id" type="UUID">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+
+        <addColumn tableName="failover_operation_clusters">
+            <!-- The CP2-scoped cluster_partitions row assigned by migrateBatch().
+                 Used for targeted PartitionChangedEvent and generation bump. -->
+            <column name="target_cluster_partition_id" type="UUID">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+
+        <addColumn tableName="failover_operation_clusters">
+            <!-- The application_partitions row this cluster's apps were on for CP1.
+                 NULL if the cluster had no active applications at migration time. -->
+            <column name="source_application_partition_id" type="UUID">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+
+        <addColumn tableName="failover_operation_clusters">
+            <!-- The CP2-scoped application_partitions row assigned by migrateBatch()
+                 via cluster-locality lookup.
+                 NULL if the cluster had no active applications at migration time. -->
+            <column name="target_application_partition_id" type="UUID">
+                <constraints nullable="true"/>
+            </column>
+        </addColumn>
+
+        <rollback>
+            <dropColumn tableName="failover_operation_clusters" columnName="source_cluster_partition_id"/>
+            <dropColumn tableName="failover_operation_clusters" columnName="target_cluster_partition_id"/>
+            <dropColumn tableName="failover_operation_clusters" columnName="source_application_partition_id"/>
+            <dropColumn tableName="failover_operation_clusters" columnName="target_application_partition_id"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.12-foc-partition-tracking-fks" author="argocd-platform">
+
+        <addForeignKeyConstraint
+                baseTableName="failover_operation_clusters"
+                baseColumnNames="source_cluster_partition_id"
+                referencedTableName="cluster_partitions"
+                referencedColumnNames="id"
+                constraintName="fk_foc_src_cluster_partition"/>
+
+        <addForeignKeyConstraint
+                baseTableName="failover_operation_clusters"
+                baseColumnNames="target_cluster_partition_id"
+                referencedTableName="cluster_partitions"
+                referencedColumnNames="id"
+                constraintName="fk_foc_tgt_cluster_partition"/>
+
+        <addForeignKeyConstraint
+                baseTableName="failover_operation_clusters"
+                baseColumnNames="source_application_partition_id"
+                referencedTableName="application_partitions"
+                referencedColumnNames="id"
+                constraintName="fk_foc_src_app_partition"/>
+
+        <addForeignKeyConstraint
+                baseTableName="failover_operation_clusters"
+                baseColumnNames="target_application_partition_id"
+                referencedTableName="application_partitions"
+                referencedColumnNames="id"
+                constraintName="fk_foc_tgt_app_partition"/>
+
+        <rollback>
+            <dropForeignKeyConstraint baseTableName="failover_operation_clusters"
+                                      constraintName="fk_foc_src_cluster_partition"/>
+            <dropForeignKeyConstraint baseTableName="failover_operation_clusters"
+                                      constraintName="fk_foc_tgt_cluster_partition"/>
+            <dropForeignKeyConstraint baseTableName="failover_operation_clusters"
+                                      constraintName="fk_foc_src_app_partition"/>
+            <dropForeignKeyConstraint baseTableName="failover_operation_clusters"
+                                      constraintName="fk_foc_tgt_app_partition"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

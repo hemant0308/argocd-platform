@@ -16,7 +16,10 @@ spec:
 
   template:
     metadata:
-      name: 'cluster-partition-{{`{{partitionNumber}}`}}'
+      # Include controlPlaneName so Application names are unique across CPs.
+      # Under Option B, partitionNumber restarts per CP, so two CPs can both
+      # have partition 1 — the CP suffix makes them distinct ArgoCD Applications.
+      name: 'cluster-partition-{{`{{partitionNumber}}`}}-{{`{{controlPlaneName}}`}}'
       annotations:
         argocd-platform/generation: '{{`{{generation}}`}}'
         argocd-platform/cluster-count: '{{`{{clusterCount}}`}}'
@@ -39,6 +42,9 @@ spec:
             # Poll interval for the inner cluster-groups ApplicationSet.
             # Controlled centrally from argocd/managed values.
             requeueAfterSeconds: {{ .Values.requeueAfterSeconds.clusterGroups }}
+            # CP name forwarded to the inner chart so it can pass cpName to the
+            # cluster-groups plugin. Required by Option B (CP-scoped partitions).
+            cpName: '{{`{{controlPlaneName}}`}}'
 
       # Deploy to the managed ArgoCD cluster itself — the chart renders an
       # ApplicationSet resource that lives on the managed control plane.

@@ -77,8 +77,9 @@ public class ClusterService {
         // Always resolve control plane on create — reassignControlPlane is update-only
         UUID controlPlaneId = resolveControlPlaneId(request);
 
-        UUID partitionId = partitionService.resolvePartitionId(
-                PartitionType.CLUSTER, partitionProperties.getClusterTargetSize());
+        // CP-scoped partition: partition number is unique per control plane (Option B)
+        UUID partitionId = partitionService.resolveClusterPartitionForCp(
+                controlPlaneId, partitionProperties.getClusterTargetSize());
 
         ClustersEntity entity = new ClustersEntity()
                 .setName(request.getName())

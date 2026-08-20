@@ -2,6 +2,13 @@
 # Injected from the outer cluster-partitions ApplicationSet via valuesObject.
 partitionNumber: ""
 
+# Control plane name that owns this partition (CP-scoped, Option B).
+# Injected from the outer cluster-partitions ApplicationSet via valuesObject.
+# Forwarded to the cluster-groups plugin so it can look up the partition by
+# (partitionNumber, cpName). Also used to uniquify this ApplicationSet's name
+# so that two CPs with the same partitionNumber don't collide.
+cpName: ""
+
 # Generation — bumped in the DB whenever clusters are added to or removed
 # from this partition. Embedding it as an annotation on the inner ApplicationSet
 # causes ArgoCD to re-sync this chart and re-evaluate the plugin generator.

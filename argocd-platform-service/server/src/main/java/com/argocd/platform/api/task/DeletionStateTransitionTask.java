@@ -89,6 +89,46 @@ public class DeletionStateTransitionTask {
      * <p>Publishes a {@link PartitionChangedEvent} for each transitioned app so the
      * plugin cache is invalidated and the app disappears from the next plugin response,
      * triggering ArgoCD to prune it with the {@code resources-finalizer}.
+     *
+     * <hr>
+     * <h4>⚠ FAILOVER PARTITION RACE — CP-SCOPED PARTITIONS (Option B)</h4>
+     *
+     * <p>This method is the FALLBACK path for the {@code deletion_partition_generation} fence.
+     * Under Option B, a HARD_DELETE app's cluster can be moved by
+     * {@code FailoverBatchService.migrateBatch()} while the app is between
+     * {@code HARD_DELETE} and {@code AWAITING_PRUNE}. This creates the following race window:
+     *
+     * <ol>
+     *   <li>App enters HARD_DELETE state:
+     *       {@code applications.deletion_partition_generation} is set to generation G,
+     *       which is the generation of the app's current {@code application_partition_id}
+     *       (call it Partition-CP1-N) at initiation time.</li>
+     *   <li>{@code migrateBatch()} runs: {@code applications.application_partition_id} is
+     *       updated to a new CP2-scoped partition (Partition-CP2-M).
+     *       The stored generation G now refers to Partition-CP1-N, which the app no longer
+     *       belongs to.</li>
+     *   <li>ArgoCD syncs Partition-CP2-M at generation G'. The status service receives
+     *       {@code on-application-partition-synced} with G'. It checks
+     *       G' ≥ {@code deletion_partition_generation} (G). Since G' and G are from
+     *       different partitions (different counters), this comparison is unreliable:
+     *       G' &lt; G is plausible, causing the fence to stay closed forever for this app.</li>
+     *   <li>The primary event-driven path ({@code ArgoCDStatusService}) never fires
+     *       {@code HARD_DELETE → AWAITING_PRUNE} for this app. THIS METHOD — the fallback —
+     *       eventually fires after {@link #hardDeleteFallbackSeconds}.</li>
+     *   <li>Worst case: the {@code resources-finalizer} manifest was not yet synced to CP2
+     *       when the fallback fires. ArgoCD prunes the Application without cascade →
+     *       orphaned resources remain on CP2.</li>
+     * </ol>
+     *
+     * <p><b>Current mitigation</b>: {@code FailoverBatchService.migrateBatch()} emits a
+     * WARNING log (Step 1 in the method body) when any HARD_DELETE app's cluster is being
+     * moved. Operators should monitor for this log and avoid scheduled failovers while
+     * hard-deletes are in progress.
+     *
+     * <p><b>Future improvement</b>: block {@code migrateBatch()} from moving a cluster if any
+     * of its apps are in HARD_DELETE state, OR implement cross-partition generation tracking
+     * (fence on partition UUID + generation pair instead of bare generation integer) to make
+     * the fence reliable after a partition reassignment.
      */
     @Scheduled(fixedDelayString = "${argocd.platform.deletion.check-interval-ms:3000000}")
     @Transactional

@@ -1,0 +1,1246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Managed ArgoCD Platform — Technical Briefing</title>
+  <style>
+    :root {
+      --wm-blue:   #0071CE;
+      --wm-yellow: #d4920a;
+      --wm-dark:   #041E42;
+      --wm-green:  #007a3d;
+      --wm-red:    #CC0000;
+      --bg:        #f6f8fa;
+      --surface:   #ffffff;
+      --surface2:  #f0f4f8;
+      --border:    #d0d7de;
+      --text:      #1a2332;
+      --muted:     #57606a;
+      --code-bg:   #f6f8fa;
+      --tag-blue:  #dbeafe;
+      --tag-green: #dcfce7;
+      --tag-red:   #fee2e2;
+      --tag-yellow:#fef3c7;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    /* ── TOP BAR ── */
+    header {
+      background: var(--wm-dark);
+      border-bottom: 3px solid var(--wm-blue);
+      padding: 16px 32px;
+      display: flex;
+      align-items: baseline;
+      gap: 20px;
+    }
+    header h1 {
+      font-size: 18px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: -0.3px;
+    }
+    header .sub {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .status-badge {
+      margin-left: auto;
+      background: #dcfce7;
+      color: #166534;
+      border: 1px solid #86efac;
+      font-size: 11px;
+      padding: 2px 10px;
+      border-radius: 20px;
+      font-weight: 600;
+    }
+
+    /* ── LAYOUT ── */
+    .container {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      max-width: 1400px;
+      margin: 0 auto;
+      min-height: calc(100vh - 57px);
+    }
+
+    /* ── SIDEBAR ── */
+    nav {
+      border-right: 1px solid var(--border);
+      padding: 24px 0;
+      position: sticky;
+      top: 0;
+      height: calc(100vh - 57px);
+      overflow-y: auto;
+    }
+    nav ul { list-style: none; }
+    nav li a {
+      display: block;
+      padding: 6px 20px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 12.5px;
+      border-left: 2px solid transparent;
+      transition: all 0.15s;
+    }
+    nav li a:hover {
+      color: var(--text);
+      background: var(--surface);
+      border-left-color: var(--wm-blue);
+    }
+    nav .section-label {
+      padding: 10px 20px 4px;
+      color: var(--wm-blue);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+    }
+
+    /* ── CONTENT ── */
+    main {
+      padding: 32px 40px;
+      max-width: 960px;
+    }
+
+    section {
+      margin-bottom: 48px;
+      scroll-margin-top: 16px;
+    }
+
+    h2 {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--wm-yellow);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 8px;
+      margin-bottom: 20px;
+    }
+
+    h3 {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--wm-blue);
+      margin: 20px 0 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    h4 {
+      font-size: 13px;
+      font-weight: 600;
+      color: #cdd9e5;
+      margin: 14px 0 6px;
+    }
+
+    p { margin-bottom: 10px; color: var(--text); }
+
+    /* ── CARDS / BOXES ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-bottom: 14px;
+    }
+    .card-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      margin-bottom: 8px;
+    }
+
+    .highlight-box {
+      border-left: 3px solid var(--wm-blue);
+      background: var(--surface2);
+      padding: 12px 16px;
+      border-radius: 0 6px 6px 0;
+      margin: 12px 0;
+      font-size: 13px;
+    }
+    .highlight-box.green  { border-color: var(--wm-green); }
+    .highlight-box.yellow { border-color: var(--wm-yellow); }
+    .highlight-box.red    { border-color: var(--wm-red); }
+
+    /* ── CODE ── */
+    pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px 16px;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.55;
+      margin: 10px 0;
+      font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+    }
+    code {
+      font-family: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+      font-size: 12px;
+      background: var(--surface2);
+      padding: 1px 5px;
+      border-radius: 3px;
+      color: #0077b6;
+    }
+    pre code {
+      background: none;
+      padding: 0;
+      color: #1a2332;
+    }
+    .kw  { color: #c2185b; }
+    .str { color: #1565c0; }
+    .cmt { color: #6a737d; font-style: italic; }
+    .val { color: #0077b6; }
+    .cls { color: #e65100; }
+
+    /* ── TAGS ── */
+    .tag {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 20px;
+      margin-left: 6px;
+      vertical-align: middle;
+    }
+    .tag-done   { background: var(--tag-green);  color: #166534;          border: 1px solid #86efac;          }
+    .tag-todo   { background: var(--tag-blue);   color: #1d4ed8;          border: 1px solid #93c5fd;          }
+    .tag-warn   { background: var(--tag-yellow); color: #92400e;          border: 1px solid #fcd34d;          }
+
+    /* ── TABLES ── */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+      margin: 12px 0;
+    }
+    th {
+      background: var(--surface2);
+      color: var(--wm-blue);
+      text-align: left;
+      padding: 8px 12px;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    td {
+      padding: 7px 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: var(--surface2); }
+
+    /* ── GRID ── */
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+
+    /* ── COMPONENT PILLS ── */
+    .pill-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+    .pill {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 4px 14px;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .pill.blue   { border-color: var(--wm-blue);   color: var(--wm-blue);   background: var(--tag-blue); }
+    .pill.green  { border-color: var(--wm-green);  color: var(--wm-green);  background: var(--tag-green); }
+    .pill.yellow { border-color: var(--wm-yellow); color: var(--wm-yellow); background: var(--tag-yellow); }
+
+    /* ── TREE ── */
+    .tree {
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 12px;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px 16px;
+      line-height: 1.8;
+      color: #e6edf3;
+      overflow-x: auto;
+    }
+    .tree .node-appset { color: #c2410c; }
+    .tree .node-app    { color: #1d4ed8; }
+    .tree .node-leaf   { color: #166534; }
+    .tree .node-cp     { color: #7e22ce; }
+    .tree .node-label  { color: var(--muted); }
+
+    /* ── STEP LIST ── */
+    .step-list { list-style: none; counter-reset: steps; }
+    .step-list li {
+      counter-increment: steps;
+      padding: 8px 0 8px 44px;
+      position: relative;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .step-list li:last-child { border-bottom: none; }
+    .step-list li::before {
+      content: counter(steps);
+      position: absolute;
+      left: 0;
+      top: 8px;
+      width: 26px;
+      height: 26px;
+      background: var(--wm-blue);
+      color: #fff;
+      border-radius: 50%;
+      font-size: 11px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    ul.bullet { list-style: disc; padding-left: 20px; }
+    ul.bullet li { margin: 4px 0; font-size: 13px; }
+
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 32px 0;
+    }
+
+    .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+
+    /* ── CALLOUT ── */
+    .callout {
+      display: flex;
+      gap: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px 16px;
+      margin: 12px 0;
+      font-size: 13px;
+    }
+    .callout-icon { font-size: 18px; flex-shrink: 0; }
+    .callout.warn  { border-color: var(--wm-yellow); }
+    .callout.info  { border-color: var(--wm-blue);   }
+    .callout.success { border-color: var(--wm-green); }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Managed ArgoCD Platform</h1>
+  <span class="sub">Technical Briefing — Internal</span>
+  <span class="status-badge">Active Development</span>
+</header>
+
+<div class="container">
+
+  <!-- ═══════════════════════════════ SIDEBAR ═══════════════════════════════ -->
+  <nav>
+    <div class="section-label">Overview</div>
+    <ul>
+      <li><a href="#arch">Architecture Stack</a></li>
+      <li><a href="#ownership">Ownership Model</a></li>
+      <li><a href="#db">Database Model</a></li>
+    </ul>
+
+    <div class="section-label">GitOps Infra</div>
+    <ul>
+      <li><a href="#bootstrap">Bootstrap</a></li>
+      <li><a href="#cp-provision">CP Provisioning</a></li>
+      <li><a href="#git-db-split">Git vs PostgreSQL Split</a></li>
+    </ul>
+
+    <div class="section-label">ApplicationSets</div>
+    <ul>
+      <li><a href="#appset-rule">3-Level Rule</a></li>
+      <li><a href="#cp-pipeline">Control Planes Pipeline</a></li>
+      <li><a href="#project-pipeline">Projects Pipeline</a></li>
+      <li><a href="#cluster-pipeline">Clusters Pipeline</a></li>
+      <li><a href="#app-pipeline">Applications Pipeline</a></li>
+      <li><a href="#plugin-api">Plugin Generator API</a></li>
+    </ul>
+
+    <div class="section-label">Partitions</div>
+    <ul>
+      <li><a href="#partition-model">Partition Model</a></li>
+      <li><a href="#stable-assign">Stable Assignment</a></li>
+    </ul>
+
+    <div class="section-label">Caching &amp; Events</div>
+    <ul>
+      <li><a href="#redis-cache">Redis Cache</a></li>
+      <li><a href="#event-driven">Event-Driven Reconciliation</a></li>
+      <li><a href="#notifications">ArgoCD Notifications</a></li>
+    </ul>
+
+    <div class="section-label">Security</div>
+    <ul>
+      <li><a href="#identity">Identity &amp; RBAC</a></li>
+      <li><a href="#resource-blacklist">Resource Blacklisting</a></li>
+    </ul>
+
+    <div class="section-label">Resilience</div>
+    <ul>
+      <li><a href="#failover">Failover Model</a></li>
+    </ul>
+
+    <div class="section-label">Status</div>
+    <ul>
+      <li><a href="#built">What's Built</a></li>
+      <li><a href="#todos">TODO Items</a></li>
+    </ul>
+  </nav>
+
+  <!-- ═══════════════════════════════ MAIN ═══════════════════════════════ -->
+  <main>
+
+    <!-- ════════════════ ARCHITECTURE ════════════════ -->
+    <section id="arch">
+      <h2>Architecture Stack</h2>
+      <p>A central <strong>Managed ArgoCD</strong> orchestration layer sitting in front of multiple ArgoCD control planes. Users interact only with the Routing Service; they never talk to a CP directly.</p>
+
+      <pre>
+          User
+            │  REST API
+            ▼
+     ┌─────────────────┐
+     │  Routing Service │  Spring Boot — argocd-platform-service
+     │  (PostgreSQL)    │  Source of truth for all user state
+     └────────┬────────┘
+              │  Plugin Generator callbacks
+              ▼
+     ┌──────────────────┐
+     │  Managed ArgoCD  │  Central orchestrator (GitOps for infra)
+     └──┬───────┬───────┘
+        │       │        │
+        ▼       ▼        ▼
+      CP-1    CP-2      CP-N     ← ArgoCD Helm installs, Git-managed
+        │       │        │
+        ▼       ▼        ▼
+     User Clusters (deployed workloads)
+      </pre>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Platform-owned state</div>
+          Git: bootstrap, CP Helm values, platform ApplicationSets, charts
+        </div>
+        <div class="card">
+          <div class="card-title">User-owned state</div>
+          PostgreSQL: users, projects, clusters, applications, partitions, CP assignment
+        </div>
+      </div>
+
+      <div class="highlight-box">
+        <strong>Key invariant:</strong> User applications, projects, and clusters are never manually maintained in Git. All user mutations flow through the Routing Service API → PostgreSQL → ArgoCD reconciliation cycle.
+      </div>
+    </section>
+
+    <!-- ════════════════ OWNERSHIP ════════════════ -->
+    <section id="ownership">
+      <h2>Ownership Model</h2>
+      <table>
+        <thead><tr><th>What</th><th>Where</th><th>Examples</th></tr></thead>
+        <tbody>
+          <tr><td>Managed ArgoCD bootstrap</td><td>Git</td><td><code>bootstrap/application.yaml</code></td></tr>
+          <tr><td>CP Helm values</td><td>Git</td><td><code>control-planes/values/cp-1/default.yaml</code></td></tr>
+          <tr><td>Platform ApplicationSets</td><td>Git</td><td><code>managed/applicationsets/</code></td></tr>
+          <tr><td>Helm charts</td><td>Git</td><td><code>charts/project-partition/</code>, <code>charts/application-partition/</code></td></tr>
+          <tr><td>Users / Projects / Clusters</td><td>PostgreSQL</td><td>managed via REST API</td></tr>
+          <tr><td>Applications + sources</td><td>PostgreSQL (<code>sources</code> JSONB)</td><td>any ArgoCD source shape — no schema changes needed</td></tr>
+          <tr><td>Partition assignments</td><td>PostgreSQL</td><td>stable FK — never recalculated</td></tr>
+          <tr><td>CP assignment</td><td>PostgreSQL (<code>clusters.control_plane_id</code>)</td><td>updated during failover</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ════════════════ DATABASE ════════════════ -->
+    <section id="db">
+      <h2>Database Model (key tables)</h2>
+      <div class="grid-2">
+        <div>
+          <h3>Core entities</h3>
+          <table>
+            <thead><tr><th>Table</th><th>Key columns</th></tr></thead>
+            <tbody>
+              <tr><td><code>users</code></td><td>id, username, status</td></tr>
+              <tr><td><code>projects</code></td><td>id, name, status, created_by, <strong>project_partition_id</strong></td></tr>
+              <tr><td><code>clusters</code></td><td>id, name, server, status, <strong>cluster_partition_id</strong>, <strong>control_plane_id</strong>, namespaces, labels, auth JSONB</td></tr>
+              <tr><td><code>applications</code></td><td>id, name (suffixed), project_id, cluster_id, <strong>application_partition_id</strong>, status, generation, sources JSONB</td></tr>
+              <tr><td><code>control_planes</code></td><td>id, name, server, endpoint, status</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <h3>Relationship + partition tables</h3>
+          <table>
+            <thead><tr><th>Table</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><code>project_members</code></td><td>user → project role (OWNER/MEMBER)</td></tr>
+              <tr><td><code>project_clusters</code></td><td>cluster ↔ project mapping</td></tr>
+              <tr><td><code>project_partitions</code></td><td>partition_number, generation, status</td></tr>
+              <tr><td><code>cluster_partitions</code></td><td>partition_number, generation, status</td></tr>
+              <tr><td><code>application_partitions</code></td><td>partition_number, generation, status</td></tr>
+            </tbody>
+          </table>
+          <div class="highlight-box" style="margin-top:10px;">
+            <strong>CP assignment lives on <code>clusters</code>, not <code>applications</code>.</strong><br/>
+            CP is derived: <code>application → cluster → control_plane</code>. Moving an app to a new CP = update <code>cluster.control_plane_id</code> only.
+          </div>
+        </div>
+      </div>
+
+      <h3>Application name uniqueness</h3>
+      <p>Service appends a 5-char lowercase hex suffix at creation: <code>my-app</code> → <code>my-app-3f2a1</code>. Global unique constraint on <code>applications.name</code>. Suffix is returned in create response — callers must store it.</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- ════════════════ BOOTSTRAP ════════════════ -->
+    <section id="bootstrap">
+      <h2>Bootstrap — Managed ArgoCD Installation</h2>
+      <p>The platform itself is bootstrapped via a single <strong>App-of-Apps</strong> entry point committed to Git. Managed ArgoCD manages its own platform ApplicationSets through this bootstrap.</p>
+
+      <h3>Entry point</h3>
+      <pre><span class="kw">apiVersion:</span> argoproj.io/v1alpha1
+<span class="kw">kind:</span> Application
+<span class="kw">metadata:</span>
+  <span class="kw">name:</span> argocd-platform
+  <span class="kw">namespace:</span> argocd
+<span class="kw">spec:</span>
+  <span class="kw">project:</span> default
+  <span class="kw">source:</span>
+    <span class="kw">repoURL:</span> <span class="str">https://github.com/hemant0308/argocd-platform.git</span>
+    <span class="kw">targetRevision:</span> main
+    <span class="kw">path:</span> argocd/managed       <span class="cmt"># Helm chart containing platform AppSets</span>
+  <span class="kw">destination:</span>
+    <span class="kw">server:</span> https://kubernetes.default.svc
+    <span class="kw">namespace:</span> argocd
+  <span class="kw">syncPolicy:</span>
+    <span class="kw">automated:</span>
+      <span class="kw">prune:</span> true
+      <span class="kw">selfHeal:</span> true</pre>
+
+      <ol class="step-list">
+        <li>Bootstrap Application is applied once manually (or via CI) to Managed ArgoCD's cluster</li>
+        <li>It points to <code>argocd/managed</code> — a Helm chart that declares all top-level ApplicationSets (CP, project-partitions, cluster-partitions, application-partitions)</li>
+        <li>From this point forward, all platform AppSet changes go through Git → ArgoCD self-heal. No manual kubectl needed.</li>
+      </ol>
+
+      <div class="highlight-box green">
+        Managed ArgoCD manages itself. The platform is fully GitOps from day 1 — including the control-plane installations.
+      </div>
+    </section>
+
+    <!-- ════════════════ CP PROVISION ════════════════ -->
+    <section id="cp-provision">
+      <h2>Control Plane Provisioning</h2>
+      <p>New ArgoCD control planes are provisioned automatically by Managed ArgoCD itself via a <strong>Cluster Generator</strong> ApplicationSet. No manual Helm installs needed once a cluster is labelled.</p>
+
+      <h3>Cluster Generator AppSet</h3>
+      <pre><span class="cmt"># managed/applicationsets/control-planes.yaml</span>
+<span class="kw">generators:</span>
+  - <span class="kw">clusters:</span>
+      <span class="kw">selector:</span>
+        <span class="kw">matchLabels:</span>
+          <span class="val">argocd-platform/control-plane:</span> <span class="str">"true"</span></pre>
+
+      <p>For each cluster matching this label, Managed ArgoCD generates and syncs one Application that installs the <code>argo-cd</code> Helm chart:</p>
+
+      <div class="grid-2">
+        <div>
+          <h4>Common values</h4>
+          <code>control-planes/values/default.yaml</code>
+          <p style="margin-top:6px;font-size:12px;color:var(--muted);">Notification triggers, ArgoCD base config, resource limits shared by all CPs</p>
+        </div>
+        <div>
+          <h4>Per-CP override values</h4>
+          <code>control-planes/values/cp-1/default.yaml</code>
+          <p style="margin-top:6px;font-size:12px;color:var(--muted);">CP-specific ingress, auth, node selectors, scaling config</p>
+        </div>
+      </div>
+
+      <div class="highlight-box">
+        <strong>To add a new CP:</strong> register the K8s cluster in Managed ArgoCD with the label <code>argocd-platform/control-plane: "true"</code> → Managed ArgoCD automatically creates + syncs an Application that installs ArgoCD on it.
+      </div>
+    </section>
+
+    <!-- ════════════════ GIT vs PG ════════════════ -->
+    <section id="git-db-split">
+      <h2>Git vs PostgreSQL Responsibility Split</h2>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Git owns (platform-layer)</div>
+          <ul class="bullet">
+            <li>Managed ArgoCD bootstrap</li>
+            <li>CP Helm values (common + per-CP)</li>
+            <li>Platform ApplicationSet definitions</li>
+            <li>Helm charts (project-partition, cluster-partition, application-partition, application-registration)</li>
+            <li>Notification trigger/template config</li>
+          </ul>
+        </div>
+        <div class="card">
+          <div class="card-title">PostgreSQL owns (user-layer)</div>
+          <ul class="bullet">
+            <li>User accounts + project memberships</li>
+            <li>Projects + cluster assignments</li>
+            <li>Clusters + CP assignment (<code>control_plane_id</code>)</li>
+            <li>Applications + Git sources (JSONB — schema-free)</li>
+            <li>Partition assignments (stable FK, never recalculated)</li>
+            <li>Resource status lifecycle</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- ════════════════ 3-LEVEL RULE ════════════════ -->
+    <section id="appset-rule">
+      <h2>The 3-Level ApplicationSet Rule</h2>
+      <div class="highlight-box yellow">
+        <strong>Critical ArgoCD constraint:</strong> An ApplicationSet cannot create another ApplicationSet directly. The hierarchy must alternate: <code>AppSet → App → AppSet → App</code>.
+      </div>
+
+      <div class="tree">
+<span class="node-appset">AppSet (Level 1)</span>  <span class="node-label">← Plugin Generator: partition discovery</span>
+  └── <span class="node-app">App (Level 2)</span>    <span class="node-label">← deploys a Helm chart that contains the child AppSet</span>
+        └── <span class="node-appset">AppSet (Level 3)</span>  <span class="node-label">← Plugin Generator: group/member query for this partition</span>
+              └── <span class="node-leaf">App / Resource (Level 4)</span>  <span class="node-label">← actual user resource</span>
+      </div>
+
+      <p>This 3-level structure is applied identically to all four resource pipelines: control planes, projects, clusters, applications.</p>
+    </section>
+
+    <!-- ════════════════ CP PIPELINE ════════════════ -->
+    <section id="cp-pipeline">
+      <h2>Control Planes Pipeline — Cluster Generator</h2>
+      <p>Unlike the other 3 pipelines, control plane management uses the <strong>Cluster Generator</strong> (not Plugin Generator). It operates at 1 level (no partitioning needed).</p>
+
+      <div class="tree">
+<span class="node-appset">control-planes-appset</span>  <span class="node-label">[Cluster Generator — label: argocd-platform/control-plane=true]</span>
+  ├── <span class="node-cp">control-plane-cp-1</span>  <span class="node-label">[App] → installs argo-cd Helm chart on CP-1 cluster</span>
+  ├── <span class="node-cp">control-plane-cp-2</span>  <span class="node-label">[App] → installs argo-cd Helm chart on CP-2 cluster</span>
+  └── <span class="node-cp">control-plane-cp-N</span>  <span class="node-label">[App] → installs argo-cd Helm chart on CP-N cluster</span>
+      </div>
+
+      <div class="callout warn">
+        <span class="callout-icon">⚠️</span>
+        <div>Auto-prune is <strong>disabled</strong> on this AppSet. Removing a CP from the registry must go through a deliberate drain → remove workflow. Auto-pruning would cascade ArgoCD removal to all child workloads — catastrophic blast radius.</div>
+      </div>
+    </section>
+
+    <!-- ════════════════ PROJECT PIPELINE ════════════════ -->
+    <section id="project-pipeline">
+      <h2>Projects Pipeline — 3-Level Plugin Generator</h2>
+      <div class="tree">
+<span class="node-appset">project-partition-appset</span>
+  <span class="node-label">  Plugin Generator → POST /api/v1/getparams.execute  resource=project-partitions</span>
+  <span class="node-label">  Returns: [{partitionNumber:1, controlPlanes:[cp-1,cp-2,cp-3]}, ...]</span>
+  │
+  ├── <span class="node-app">project-partition-01</span>  <span class="node-label">[App] → charts/project-partition, helm.valuesObject.partition=01</span>
+  │     └── <span class="node-appset">project-partition-01-appset</span>
+  │           <span class="node-label">  Plugin Generator → resource=project-groups  partitionNumber=01</span>
+  │           <span class="node-label">  Returns: [{controlPlane:cp-1, projects:[{name,clusters:[...]}]}, {controlPlane:cp-2,...}]</span>
+  │           ├── <span class="node-leaf">project-01-cp-1</span>  <span class="node-label">[App] creates AppProject on CP-1</span>
+  │           ├── <span class="node-leaf">project-01-cp-2</span>  <span class="node-label">[App] creates AppProject on CP-2</span>
+  │           └── <span class="node-leaf">project-01-cp-N</span>  <span class="node-label">... (AppProjects fan out to ALL CPs)</span>
+  │
+  └── <span class="node-app">project-partition-02</span>  <span class="node-label">... same structure</span>
+      </div>
+
+      <div class="callout info">
+        <span class="callout-icon">ℹ️</span>
+        <div><strong>Why fan out to all CPs?</strong> AppProjects must exist on every CP because any application partition can route to any CP. A project created once in PostgreSQL must have a corresponding AppProject on all CPs before any application can be assigned to clusters on those CPs.</div>
+      </div>
+
+      <h4>project-groups response shape</h4>
+      <pre>{
+  <span class="str">"partitionNumber"</span>: 1,
+  <span class="str">"controlPlane"</span>: <span class="str">"cp-1"</span>,
+  <span class="str">"projects"</span>: [
+    {
+      <span class="str">"name"</span>: <span class="str">"payments"</span>,
+      <span class="str">"clusters"</span>: [
+        { <span class="str">"name"</span>: <span class="str">"cluster-001"</span>, <span class="str">"namespaces"</span>: [<span class="str">"payments-prod"</span>] }
+      ]
+    }
+  ]
+}</pre>
+      <p><code>spec.destinations</code> on the AppProject are generated from this cluster list — not statically configured in Git.</p>
+    </section>
+
+    <!-- ════════════════ CLUSTER PIPELINE ════════════════ -->
+    <section id="cluster-pipeline">
+      <h2>Clusters Pipeline — 3-Level Plugin Generator</h2>
+      <div class="tree">
+<span class="node-appset">cluster-partition-appset</span>
+  <span class="node-label">  resource=cluster-partitions → [{partitionNumber:1,...}, {partitionNumber:2,...}]</span>
+  │
+  ├── <span class="node-app">cluster-partition-01</span>  <span class="node-label">[App] → charts/cluster-partition, partition=01</span>
+  │     └── <span class="node-appset">cluster-partition-01-appset</span>
+  │           <span class="node-label">  resource=cluster-groups  partitionNumber=01</span>
+  │           <span class="node-label">  Returns elements grouped by CP: clusters targeting CP-1, clusters targeting CP-2</span>
+  │           ├── <span class="node-leaf">cluster-group-01-cp-1</span>  <span class="node-label">[App] deploys cluster registration secrets on CP-1</span>
+  │           └── <span class="node-leaf">cluster-group-01-cp-2</span>  <span class="node-label">[App] deploys cluster registration secrets on CP-2</span>
+  │
+  └── <span class="node-app">cluster-partition-02</span>  <span class="node-label">... same</span>
+      </div>
+
+      <p>The <code>cluster-groups</code> response groups clusters by their <code>control_plane_id</code>. The <code>auth</code> JSONB from the clusters table is passed verbatim to the cluster-registration Helm chart, which generates the ArgoCD cluster <code>Secret</code>.</p>
+    </section>
+
+    <!-- ════════════════ APP PIPELINE ════════════════ -->
+    <section id="app-pipeline">
+      <h2>Applications Pipeline — 3-Level Plugin Generator</h2>
+      <div class="tree">
+<span class="node-appset">application-partition-appset</span>
+  <span class="node-label">  resource=application-partitions → [{partitionNumber:1,...}, {partitionNumber:2,...}]</span>
+  │
+  ├── <span class="node-app">application-partition-0001</span>  <span class="node-label">[App] → charts/application-partition, partition=0001</span>
+  │     └── <span class="node-appset">application-partition-0001-appset</span>
+  │           <span class="node-label">  resource=application-groups  partitionNumber=0001</span>
+  │           <span class="node-label">  Returns: [{controlPlane:cp-1, applications:[{name,project,cluster,sources}]}]</span>
+  │           ├── <span class="node-leaf">my-app-3f2a1</span>  <span class="node-label">[App] destination: https://cp-1-argocd.internal → routes to CP-1</span>
+  │           ├── <span class="node-leaf">checkout-a92b3</span>  <span class="node-label">[App] destination: https://cp-2-argocd.internal → routes to CP-2</span>
+  │           └── <span class="node-leaf">...</span>
+  │
+  └── <span class="node-app">application-partition-0002</span>  <span class="node-label">... ~100 apps per partition</span>
+      </div>
+
+      <div class="highlight-box">
+        <strong>Routing via destination server:</strong> Managed ArgoCD creates the Application; the <code>destination.server</code> points to the CP's ArgoCD. The CP then reconciles the actual K8s workload on the user's cluster. <em>Managed ArgoCD never touches the user cluster directly.</em>
+      </div>
+
+      <h4>application-groups response shape</h4>
+      <pre>{
+  <span class="str">"partitionNumber"</span>: 1,
+  <span class="str">"controlPlane"</span>: <span class="str">"cp-1"</span>,
+  <span class="str">"applications"</span>: [
+    {
+      <span class="str">"name"</span>: <span class="str">"my-app-3f2a1"</span>,
+      <span class="str">"project"</span>: <span class="str">"payments"</span>,
+      <span class="str">"cluster"</span>: <span class="str">"cluster-001"</span>,
+      <span class="str">"sources"</span>: [{ <span class="str">"repoURL"</span>: <span class="str">"..."</span>, <span class="str">"revision"</span>: <span class="str">"main"</span>, <span class="str">"path"</span>: <span class="str">"deploy"</span> }]
+    }
+  ]
+}</pre>
+      <p><code>sources</code> is the raw JSONB from the DB. Any ArgoCD source shape works (single, multi-source, Helm, Kustomize) without schema changes.</p>
+    </section>
+
+    <!-- ════════════════ PLUGIN API ════════════════ -->
+    <section id="plugin-api">
+      <h2>Plugin Generator API Reference</h2>
+      <p>All ArgoCD-facing data APIs use the <strong>Plugin Generator protocol</strong>: <code>POST /api/v1/getparams.execute</code> with a <code>resource</code> parameter.</p>
+
+      <table>
+        <thead>
+          <tr><th>resource value</th><th>Level</th><th>Returns</th><th>Extra params</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>project-partitions</code></td>
+            <td>L1</td>
+            <td>All partition descriptors + controlPlanes list (for fan-out)</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td><code>project-groups</code></td>
+            <td>L3</td>
+            <td>Projects per CP for a specific partition, with cluster assignments</td>
+            <td><code>partitionNumber</code></td>
+          </tr>
+          <tr>
+            <td><code>cluster-partitions</code></td>
+            <td>L1</td>
+            <td>All cluster partition descriptors</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td><code>cluster-groups</code></td>
+            <td>L3</td>
+            <td>Clusters per CP for a specific partition, including auth JSONB</td>
+            <td><code>partitionNumber</code></td>
+          </tr>
+          <tr>
+            <td><code>application-partitions</code></td>
+            <td>L1</td>
+            <td>All application partition descriptors</td>
+            <td>—</td>
+          </tr>
+          <tr>
+            <td><code>application-groups</code></td>
+            <td>L3</td>
+            <td>Applications per CP for a specific partition, with sources</td>
+            <td><code>partitionNumber</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout info">
+        <span class="callout-icon">ℹ️</span>
+        <div><strong>No List Generator used.</strong> The Plugin Generator returns actual partition descriptors (not a count). ApplicationSet creates one App per returned element — no numeric expansion primitive needed.</div>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- ════════════════ PARTITION MODEL ════════════════ -->
+    <section id="partition-model">
+      <h2>Partition Model</h2>
+
+      <div class="grid-3">
+        <div class="card">
+          <div class="card-title">3 independent dimensions</div>
+          <code>project_partitions</code><br/>
+          <code>cluster_partitions</code><br/>
+          <code>application_partitions</code>
+        </div>
+        <div class="card">
+          <div class="card-title">Target partition size</div>
+          ~100 resources per partition (configurable). When all partitions are full, a new one is created.
+        </div>
+        <div class="card">
+          <div class="card-title">Scale example</div>
+          200K apps<br/>
+          ÷ 100/partition<br/>
+          = ~2000 partitions<br/>
+          = ~2000 AppSets on Managed ArgoCD
+        </div>
+      </div>
+
+      <h3>Independence of partition vs control-plane</h3>
+      <pre>project01
+  ├── application-partition-01
+  │      ├── app-001 → CP-1
+  │      ├── app-002 → CP-2    ← same partition, different CPs
+  │      └── app-003 → CP-1
+  └── application-partition-02
+         ├── app-004 → CP-2
+         └── app-005 → CP-3</pre>
+      <p>Partition ≠ CP assignment. Failover moves apps between CPs without changing partition membership.</p>
+    </section>
+
+    <!-- ════════════════ STABLE ASSIGNMENT ════════════════ -->
+    <section id="stable-assign">
+      <h2>Stable Partition Assignment</h2>
+      <div class="callout warn">
+        <span class="callout-icon">⚠️</span>
+        <div><strong>Never dynamically rebatch.</strong> Sorting all resources and dividing every N causes unrelated resources to change partitions on every add/delete → massive unnecessary AppSet churn.</div>
+      </div>
+
+      <p>Assignments are persisted as FKs in the DB. When a resource is deleted, its partition shrinks but the other resources don't move. A new partition is created only when all existing partitions hit the configured target size.</p>
+
+      <pre><span class="cmt">// Wrong — rebatching</span>
+sort(all_apps) → take every 100 → recalculate
+
+<span class="cmt">// Correct — stable FK</span>
+app-001.application_partition_id = 1  (set at creation, never changes)
+app-050 deleted → partition-01 now has 99 members, no other app moves</pre>
+
+      <p>The <code>generation</code> column on partition tables lets ArgoCD detect that a partition's content changed without fetching all members.</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- ════════════════ REDIS CACHE ════════════════ -->
+    <section id="redis-cache">
+      <h2>Redis Partition Cache <span class="tag tag-done">✅ Built</span></h2>
+      <p>At steady state, most Plugin Generator calls return unchanged data. Re-querying PostgreSQL on every ArgoCD poll cycle across 2000 partitions creates unnecessary DB load.</p>
+
+      <h3>Implementation</h3>
+      <table>
+        <thead><tr><th>Component</th><th>Role</th></tr></thead>
+        <tbody>
+          <tr><td><code>PluginCacheService</code></td><td>Caches Plugin Generator responses per <code>(resource, partitionNumber)</code> key in Redis. Configurable TTL (default 5 min). TTL is safety net only — explicit invalidation is the primary mechanism.</td></tr>
+          <tr><td><code>CacheInvalidationListener</code></td><td>Listens for <code>PartitionChangedEvent</code> (Spring ApplicationEvent). On receipt, evicts the affected <code>(resource, partitionNumber)</code> key from Redis immediately.</td></tr>
+          <tr><td><code>ArgoCDRefreshListener</code></td><td>Listens for the same <code>PartitionChangedEvent</code>. After cache eviction, triggers an immediate ArgoCD Application refresh via the ArgoCD API so the next poll cycle gets fresh data without waiting for the poll timer.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Cache key</h3>
+      <pre>partition-cache:{resource}:{partitionNumber}
+<span class="cmt"># e.g.</span>
+partition-cache:application-groups:0001
+partition-cache:project-groups:01</pre>
+
+      <h3>Opt-in</h3>
+      <pre>CACHE_ENABLED=true   <span class="cmt"># env var — default false in local dev</span></pre>
+
+      <div class="callout success">
+        <span class="callout-icon">✅</span>
+        <div>Caching is transparent to ArgoCD. The Plugin Generator endpoint checks Redis first; on miss it queries PostgreSQL and populates the cache. ArgoCD never knows the difference.</div>
+      </div>
+    </section>
+
+    <!-- ════════════════ EVENT-DRIVEN ════════════════ -->
+    <section id="event-driven">
+      <h2>Event-Driven Reconciliation <span class="tag tag-done">✅ Built</span></h2>
+      <p>Polling (<code>requeueAfterSeconds</code>) is now a safety net only. State changes propagate immediately via events.</p>
+
+      <h3>Flow</h3>
+      <pre>User API call (app registered / cluster reassigned / CP failover)
+        │
+        ▼
+Service layer mutates PostgreSQL
+        │
+        ▼  publishes
+PartitionChangedEvent  (Spring ApplicationEvent — in-process)
+        │
+   ┌────┴─────────────────────────┐
+   ▼                              ▼
+CacheInvalidationListener    ArgoCDRefreshListener
+evicts (resource, partition)  triggers ArgoCD App refresh via API
+from Redis                    (Managed ArgoCD connection required)
+        │                              │
+        └──────────────┬───────────────┘
+                       ▼
+          ArgoCD calls Plugin Generator
+          → cache miss → fresh DB query
+          → partition data updated
+          → AppSet reconciles resources</pre>
+
+      <h3>requeueAfterSeconds config <span class="tag tag-done">✅ Built</span></h3>
+      <p>Independently configurable per resource type in <code>argocd/managed/values.yaml</code>. Changes propagate to all Level-1 and Level-2 AppSets via Helm <code>valuesObject</code>.</p>
+
+      <pre><span class="cmt"># argocd/managed/values.yaml</span>
+requeueAfterSeconds:
+  controlPlanes: 300
+  projectPartitions: 120
+  clusterPartitions: 60
+  applicationPartitions: 30</pre>
+    </section>
+
+    <!-- ════════════════ NOTIFICATIONS ════════════════ -->
+    <section id="notifications">
+      <h2>ArgoCD Notification Integration <span class="tag tag-done">✅ Built</span></h2>
+      <p>Resource status in PostgreSQL is now driven by live ArgoCD state via the notifications controller.</p>
+
+      <div class="grid-2">
+        <div>
+          <h3>Inbound (ArgoCD → Platform)</h3>
+          <ul class="bullet">
+            <li>Notifications controller on <strong>Managed ArgoCD</strong> + <strong>each CP</strong></li>
+            <li>Fires on sync/health state changes</li>
+            <li>Calls <code>POST /internal/argocd/status</code></li>
+            <li><code>ArgoCDStatusController</code> → <code>ArgoCDStatusService</code> → DB update</li>
+            <li>Token auth via shared <code>NOTIFICATION_TOKEN</code> env var</li>
+          </ul>
+          <h4>Resource statuses</h4>
+          <div class="pill-row">
+            <span class="pill">UNKNOWN</span>
+            <span class="pill blue">SYNCING</span>
+            <span class="pill green">ACTIVE</span>
+            <span class="pill yellow">DEGRADED</span>
+            <span class="pill" style="border-color:#fca5a5;color:#991b1b;background:var(--tag-red);">ERROR</span>
+          </div>
+        </div>
+        <div>
+          <h3>Outbound (Platform → Users)</h3>
+          <ul class="bullet">
+            <li><strong>Delegated to ArgoCD's native notifications controller on each CP</strong></li>
+            <li>Platform does not duplicate notification delivery</li>
+            <li>Users declare notification preferences via the <code>application-registration</code> Helm chart values → rendered as ArgoCD notification annotations on the Application</li>
+            <li>Supports any ArgoCD-supported channel (Slack, webhook, email, PagerDuty, etc.) — chart is channel-agnostic</li>
+          </ul>
+        </div>
+      </div>
+
+      <h4>Webhook template (Application labels drive routing — no name-parsing)</h4>
+      <pre><span class="str">"resourceType"</span>: <span class="str">"{{index .app.metadata.labels \"argocd-platform/resource-type\"}}"</span>
+<span class="str">"partitionNumber"</span>: <span class="str">"{{index .app.metadata.labels \"argocd-platform/partition-number\"}}"</span>
+<span class="str">"controlPlane"</span>: <span class="str">"{{index .app.metadata.labels \"argocd-platform/control-plane\"}}"</span>
+<span class="str">"syncStatus"</span>: <span class="str">"{{.app.status.sync.status}}"</span>
+<span class="str">"healthStatus"</span>: <span class="str">"{{.app.status.health.status}}"</span></pre>
+
+      <h4>Application Deletion State Machine <span class="tag tag-done">✅ Built</span></h4>
+      <pre>SOFT_DELETE: exclude from plugin response → ArgoCD prunes App → K8s resources retained
+HARD_DELETE: include hardDelete:true → chart adds resources-finalizer → ArgoCD cascade-deletes K8s resources → App pruned</pre>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- ════════════════ IDENTITY / RBAC ════════════════ -->
+    <section id="identity">
+      <h2>Identity and RBAC Boundary</h2>
+      <p>The platform uses a split authorization model: Routing Service enforces platform-level access; control-plane AppProjects enforce ArgoCD resource policy.</p>
+
+      <table>
+        <thead><tr><th>Layer</th><th>Enforces</th><th>How</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Routing Service</td>
+            <td>Platform authorization — can this user operate on Project X?</td>
+            <td><code>project_members</code> table lookup before any write</td>
+          </tr>
+          <tr>
+            <td>Control-plane AppProject</td>
+            <td>ArgoCD resource policy — what can apps in this project do?</td>
+            <td><code>clusterResourceBlacklist</code>, destination restrictions, sourceRepos</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Why the split?</h3>
+      <p>When Managed ArgoCD creates Applications/ApplicationSets on a CP, it uses its own service account (<code>system:serviceaccount:kube-system:argocd-manager</code>) — <strong>not</strong> the initiating user's identity. User-level RBAC in ArgoCD is therefore bypassed entirely. The Routing Service is the only place where user identity is checked.</p>
+    </section>
+
+    <!-- ════════════════ RESOURCE BLACKLISTING ════════════════ -->
+    <section id="resource-blacklist">
+      <h2>Project-Level Resource Blacklisting</h2>
+      <p>Since all Applications and ApplicationSets on CPs are created by Managed ArgoCD's service account, users who have ArgoCD UI/API access to their project could — without additional guards — directly create or modify ArgoCD lifecycle resources within their project, bypassing the Routing Service entirely.</p>
+
+      <div class="callout warn">
+        <span class="callout-icon">⚠️</span>
+        <div><strong>The problem:</strong> ArgoCD project RBAC controls who can create Applications in a project. But Managed ArgoCD's service account is the actor — not the end user. The end user's ArgoCD role doesn't apply to creation operations performed by the platform.</div>
+      </div>
+
+      <h3>The fix — AppProject resource blacklisting</h3>
+      <p>When Managed ArgoCD provisions an AppProject on a CP (via the <code>project-registration</code> Helm chart), it injects a <strong>platform-enforced resource blacklist</strong> that blocks users from directly creating ArgoCD CRDs inside their project:</p>
+
+      <pre><span class="cmt"># Applied at chart generation time — platform-enforced, not user-configurable</span>
+<span class="kw">clusterResourceBlacklist:</span>
+  - <span class="kw">group:</span> <span class="str">"argoproj.io"</span>        <span class="cmt"># blocks Application, ApplicationSet, AppProject</span>
+    <span class="kw">kind:</span>  <span class="str">"*"</span>
+  - <span class="kw">group:</span> <span class="str">"apiextensions.k8s.io"</span>  <span class="cmt"># blocks CRD creation</span>
+    <span class="kw">kind:</span>  <span class="str">"CustomResourceDefinition"</span></pre>
+
+      <div class="highlight-box green">
+        <strong>Result:</strong> A user accessing their project in ArgoCD UI/API cannot create Applications, ApplicationSets, or AppProjects directly. All resource lifecycle operations must go through the Managed ArgoCD API → Routing Service → PostgreSQL → reconciliation cycle.
+      </div>
+
+      <h3>Two-tier model (§32.13)</h3>
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Tier 1 — Platform defaults (Git)</div>
+          Defined in Helm values. Merged into every AppProject at reconciliation time. Cannot be overridden by users. Changing a default rolls out to all projects on next sync — no DB migration.
+        </div>
+        <div class="card">
+          <div class="card-title">Tier 2 — User-provided spec (PostgreSQL)</div>
+          Users may add additional AppProject spec via platform API (stored as <code>spec JSONB</code> on <code>projects</code> table). Platform blacklists are always <em>unioned in</em> — user cannot remove them. Allowed user additions: sourceRepos, roles, syncWindows.
+        </div>
+      </div>
+
+      <div class="callout info">
+        <span class="callout-icon">ℹ️</span>
+        <div><code>destinations</code> are <strong>never</strong> user-configurable — always derived from <code>project_clusters</code> at reconciliation time. Adding a cluster to a project in the DB is the only way to add a destination.</div>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- ════════════════ FAILOVER ════════════════ -->
+    <section id="failover">
+      <h2>Failover Model</h2>
+      <p>Control-plane assignment lives on <code>clusters.control_plane_id</code>. Applications derive their CP transitively via their cluster. No <code>control_plane_id</code> on the applications table.</p>
+
+      <pre><span class="cmt">-- CP-1 fails. Two DB updates move 200 clusters:</span>
+<span class="kw">UPDATE</span> clusters
+<span class="kw">SET</span>    control_plane_id = 'cp-2'
+<span class="kw">WHERE</span>  control_plane_id = 'cp-1';</pre>
+
+      <div class="tree">
+Before failover:
+  cluster-001 → <span class="node-cp">CP-1</span>    cluster-003 → <span class="node-cp">CP-2</span>
+  app-001, app-002 in application-partition-01
+
+After failover (DB update only):
+  cluster-001 → <span class="node-cp">CP-2</span>    cluster-003 → <span class="node-cp">CP-2</span>
+  app-001, app-002 still in application-partition-01  <span class="node-label">(partition unchanged)</span>
+
+Next AppSet reconcile:
+  application-partition-01-appset calls application-groups
+  → Routing Service joins application → cluster → control_plane
+  → returns CP-2 as destination
+  → Managed ArgoCD moves app-001, app-002 to CP-2
+      </div>
+
+      <h3>Zero churn on partition</h3>
+      <p>Application partition membership does not change during failover. The AppSet identities (<code>application-partition-0001</code>, etc.) remain stable. Only the <code>destination.server</code> on the generated Applications changes.</p>
+
+      <div class="callout info">
+        <span class="callout-icon">ℹ️</span>
+        <div><strong>Controlled Failover API (§32.10 — TODO):</strong> Planned API will wrap the raw DB update with stepping (single-switch or batched), label/name filters, dry run, async + operationId progress tracking, and cancel support.</div>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- ════════════════ WHAT'S BUILT ════════════════ -->
+    <section id="built">
+      <h2>What's Built</h2>
+      <div class="grid-2">
+        <div>
+          <h3>Platform Service (Spring Boot)</h3>
+          <ul class="bullet">
+            <li>PostgreSQL schema + migrations (Flyway)</li>
+            <li>CRUD REST APIs — projects, clusters, applications</li>
+            <li>Plugin Generator endpoint (<code>POST /api/v1/getparams.execute</code>)</li>
+            <li>All 6 resource handlers (project/cluster/application × partition/group)</li>
+            <li>5-char hex suffix on application names (global uniqueness)</li>
+            <li>Cluster-in-project validation on app creation</li>
+            <li><code>PluginCacheService</code> — Redis partition cache</li>
+            <li><code>CacheInvalidationListener</code> — event-driven eviction</li>
+            <li><code>ArgoCDRefreshListener</code> — immediate AppSet trigger</li>
+            <li><code>ArgoCDStatusController</code> — inbound notification webhook</li>
+            <li><code>ArgoCDStatusService</code> — DB status update pipeline</li>
+            <li>Application deletion state machine (SOFT_DELETE / HARD_DELETE)</li>
+          </ul>
+        </div>
+        <div>
+          <h3>GitOps / ArgoCD layer</h3>
+          <ul class="bullet">
+            <li>Bootstrap <code>application.yaml</code> (App-of-Apps)</li>
+            <li>Platform ApplicationSets (CP, project-partition, cluster-partition, application-partition)</li>
+            <li>Helm charts for all 4 partition types</li>
+            <li><code>application-registration</code> chart (SOFT/HARD delete, notification annotations)</li>
+            <li><code>project-registration</code> chart (AppProject + resource blacklist defaults)</li>
+            <li>CP values structure (<code>default.yaml</code> + per-CP overrides)</li>
+            <li>Notifications config on Managed ArgoCD + CP ArgoCD (<code>values.yaml</code>)</li>
+            <li>Configurable <code>requeueAfterSeconds</code> per resource type</li>
+            <li>Nil-guard fixes on all notification triggers</li>
+            <li><code>oncePer</code> generation-based deduplication for HARD_DELETE flow</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ════════════════ TODOs ════════════════ -->
+    <section id="todos">
+      <h2>TODO / In-Progress</h2>
+
+      <h3>Auth &amp; Identity (§32.1)</h3>
+      <div class="card">
+        <span class="tag tag-todo">TODO</span>
+        <ul class="bullet" style="margin-top:8px;">
+          <li>Pluggable external identity providers (LDAP, Azure AD, GitHub OAuth) — multiple simultaneous</li>
+          <li>AD group-based authorization for projects and clusters (group resolution, cache, configurable TTL)</li>
+          <li>Cluster ownership model (<code>created_by</code> + <code>cluster_members</code> table)</li>
+        </ul>
+      </div>
+
+      <h3>Resource Management (§32.2)</h3>
+      <div class="card">
+        <span class="tag tag-todo">TODO</span>
+        <ul class="bullet" style="margin-top:8px;">
+          <li>User management CRUD API</li>
+          <li>Resource status lifecycle — driven by §32.11 (already complete inbound side)</li>
+        </ul>
+      </div>
+
+      <h3>ApplicationSet Behavior (§32.3)</h3>
+      <div class="card">
+        <span class="tag tag-done">✅ Done</span> Configurable <code>requeueAfterSeconds</code> per resource type<br/><br/>
+        <span class="tag tag-todo">TODO</span>
+        <ul class="bullet" style="margin-top:8px;">
+          <li>Safe pruning policy + decommission runbook for CP AppSet (no auto-prune)</li>
+          <li>On-demand reconciliation API (force-refresh specific partition without waiting for poll)</li>
+          <li>Event-driven reconciliation (§32.3 + §32.9 cache path already built; needs ArgoCD connection wired)</li>
+        </ul>
+      </div>
+
+      <h3>Partitions (§32.4)</h3>
+      <div class="card">
+        <span class="tag tag-todo">TODO</span> Empty partition auto-cleanup after configurable inactivity period (ACTIVE → EMPTY → DRAINING → DELETED lifecycle)
+      </div>
+
+      <h3>Management UI (§32.5)</h3>
+      <div class="card">
+        <span class="tag tag-todo">TODO</span> SSO auth, pagination, cluster-project assignment flow, live health view, audit log
+      </div>
+
+      <h3>Observability (§32.6)</h3>
+      <div class="card">
+        <span class="tag tag-todo">TODO</span> Partition fill metrics, Plugin Generator latency, per-CP app/cluster counts, failover runbook
+      </div>
+
+      <h3>Cluster Auth (§32.7)</h3>
+      <div class="card">
+        <span class="tag tag-todo">TODO</span> Typed + validated auth mechanisms (bearer, TLS, EKS exec, GKE WI) — reject at registration time
+      </div>
+
+      <h3>Secrets (§32.8)</h3>
+      <div class="card">
+        <span class="tag tag-todo">TODO</span> External secrets backend — credentials must not be stored at rest in PostgreSQL
+      </div>
+
+      <h3>Caching (§32.9)</h3>
+      <div class="card">
+        <span class="tag tag-done">✅ Done</span> Redis <code>PluginCacheService</code>, <code>CacheInvalidationListener</code>, <code>ArgoCDRefreshListener</code>, <code>CACHE_ENABLED</code> flag
+      </div>
+
+      <h3>Controlled Failover API (§32.10)</h3>
+      <div class="card">
+        <span class="tag tag-todo">TODO</span>
+        <ul class="bullet" style="margin-top:8px;">
+          <li>Full CP failover — move all clusters to target CP</li>
+          <li>Partial failover — by cluster name list or label filter</li>
+          <li>Stepping — single-switch or configurable batches with health wait between batches</li>
+          <li>Dry run — returns plan without executing</li>
+          <li>Async with operationId + progress polling</li>
+          <li>Cancel — stop after current batch, no rollback</li>
+        </ul>
+      </div>
+
+      <h3>Notifications (§32.11)</h3>
+      <div class="card">
+        <span class="tag tag-done">✅ Done</span> Inbound: <code>ArgoCDStatusController</code>, <code>ArgoCDStatusService</code>, notifications controller on all ArgoCD instances<br/><br/>
+        <span class="tag tag-todo">TODO</span> Update <code>application-registration</code> Helm chart to accept user notification subscription annotations (channel + trigger config passed as values)
+      </div>
+
+      <h3>Change History (§32.12)</h3>
+      <div class="card">
+        <span class="tag tag-todo">TODO</span>
+        <ul class="bullet" style="margin-top:8px;">
+          <li>Per-resource history tables: <code>cluster_history</code>, <code>project_history</code>, <code>application_history</code></li>
+          <li>Separate <code>status_history</code> subtable to gate high-frequency ArgoCD notification writes</li>
+          <li>GET history endpoints: <code>/api/v1/{resource}/{id}/history?limit=20</code></li>
+        </ul>
+      </div>
+
+      <h3>AppProject Spec Config (§32.13)</h3>
+      <div class="card">
+        <span class="tag tag-todo">TODO</span> Two-tier model: platform defaults (Git) + user <code>spec JSONB</code> on projects table, merged at chart generation with blacklist union enforcement
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  // Active nav link highlighting on scroll
+  const sections = document.querySelectorAll('section[id]');
+  const links = document.querySelectorAll('nav a');
+
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        links.forEach(l => l.style.color = '');
+        links.forEach(l => {
+          if (l.getAttribute('href') === '#' + entry.target.id) {
+            l.style.color = 'var(--wm-yellow)';
+            l.style.borderLeftColor = 'var(--wm-yellow)';
+          } else {
+            l.style.borderLeftColor = 'transparent';
+          }
+        });
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+
+  sections.forEach(s => observer.observe(s));
+</script>
+
+</body>
+</html>
