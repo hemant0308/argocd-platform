@@ -18,9 +18,15 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  # Include cpName so two CPs with the same partitionNumber don't collide.
-  # Matches the Application name pattern in argocd/managed/templates/applicationsets/cluster-partitions.yaml.
-  name: cluster-partition-{{ .Values.partitionNumber }}-{{ .Values.cpName }}
+  # Named cluster-groups-{N}-{cpName} (not cluster-partition-…) to avoid a
+  # 3-level naming collision:
+  #   Layer 2 Application   : cluster-partition-{N}-{CP}  (created by argocd/managed AppSet)
+  #   Layer 3 ApplicationSet: cluster-groups-{N}-{CP}     ← this resource
+  #   Layer 4 Application   : cluster-group-{N}-{CP}      (created below)
+  # Under Option B controlPlane == cpName, so using "cluster-partition" at every
+  # level would produce three identically-named resources — a hard K8s conflict
+  # for the two Application kinds at layers 2 and 4.
+  name: cluster-groups-{{ .Values.partitionNumber }}-{{ .Values.cpName }}
   namespace: argocd
   annotations:
     argocd-platform/partition-number: "{{ .Values.partitionNumber }}"
@@ -44,7 +50,9 @@ spec:
 
   template:
     metadata:
-      name: 'cluster-partition-{{ .Values.partitionNumber }}-{{ "{{ .controlPlane }}" }}'
+      # cluster-group-{N}-{controlPlane}: leaf Application that deploys cluster-registration.
+      # Distinct from the Layer 2 "cluster-partition-{N}-{CP}" Application above it.
+      name: 'cluster-group-{{ .Values.partitionNumber }}-{{ "{{ .controlPlane }}" }}'
       labels:
         argocd-platform/resource-type: cluster
         argocd-platform/partition-number: "{{ .Values.partitionNumber }}"

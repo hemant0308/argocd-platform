@@ -22,9 +22,15 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  # Include cpName so two CPs with the same partitionNumber don't collide.
-  # Matches the Application name pattern in argocd/managed/templates/applicationsets/application-partitions.yaml.
-  name: application-partition-{{ .Values.partitionNumber }}-{{ .Values.cpName }}
+  # Named application-groups-{N}-{cpName} (not application-partition-…) to avoid a
+  # 3-level naming collision:
+  #   Layer 2 Application   : application-partition-{N}-{CP}  (created by argocd/managed AppSet)
+  #   Layer 3 ApplicationSet: application-groups-{N}-{CP}     ← this resource
+  #   Layer 4 Application   : application-group-{N}-{CP}      (created below)
+  # Under Option B controlPlane == cpName, so using "application-partition" at every
+  # level would produce three identically-named resources — a hard K8s conflict
+  # for the two Application kinds at layers 2 and 4.
+  name: application-groups-{{ .Values.partitionNumber }}-{{ .Values.cpName }}
   namespace: argocd
   annotations:
     argocd-platform/partition-number: "{{ .Values.partitionNumber }}"
@@ -48,7 +54,9 @@ spec:
 
   template:
     metadata:
-      name: 'application-partition-{{ .Values.partitionNumber }}-{{ "{{ .controlPlane }}" }}'
+      # application-group-{N}-{controlPlane}: leaf Application that deploys application-registration.
+      # Distinct from the Layer 2 "application-partition-{N}-{CP}" Application above it.
+      name: 'application-group-{{ .Values.partitionNumber }}-{{ "{{ .controlPlane }}" }}'
       labels:
         # resource-type drives switch-case routing in ArgoCDStatusService.
         argocd-platform/resource-type: application-partition
