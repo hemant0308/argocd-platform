@@ -193,12 +193,11 @@ public class ArgoCDStatusService {
             log.debug("application-partition sync (partition={}, cp='{}', generation={}): " +
                       "no HARD_DELETE candidates eligible for AWAITING_PRUNE transition",
                     partitionNumber, controlPlane, syncedGeneration);
-            return;
+        } else {
+            log.debug("application-partition sync (partition={}, cp='{}', generation={}): " +
+                      "{} HARD_DELETE candidate(s) eligible for AWAITING_PRUNE transition",
+                    partitionNumber, controlPlane, syncedGeneration, candidates.size());
         }
-
-        log.debug("application-partition sync (partition={}, cp='{}', generation={}): " +
-                  "{} HARD_DELETE candidate(s) eligible for AWAITING_PRUNE transition",
-                partitionNumber, controlPlane, syncedGeneration, candidates.size());
 
         for (ApplicationRepository.DeletionCandidate c : candidates) {
             int rows = applicationRepository.transitionDeletionMode(

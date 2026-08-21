@@ -1,5 +1,6 @@
 package com.argocd.platform.api.repository;
 
+import com.argocd.platform.api.model.request.FailoverFilter;
 import com.argocd.platform.api.model.request.FailoverRequest;
 import com.argocd.platform.api.model.response.ClusterBatchItem;
 import com.argocd.platform.api.util.FailoverClusterStatus;
@@ -73,25 +74,27 @@ public class FailoverRepository {
         // Base condition: exclude clusters already on the target CP
         Condition cond = CLUSTERS.CONTROL_PLANE_ID.ne(targetCpId);
 
-        if (request.getClusterIds() != null && !request.getClusterIds().isEmpty()) {
-            cond = cond.and(CLUSTERS.ID.in(request.getClusterIds()));
+        FailoverFilter filter = request.getFilter();
+
+        if (filter != null && filter.getClusterIds() != null && !filter.getClusterIds().isEmpty()) {
+            cond = cond.and(CLUSTERS.ID.in(filter.getClusterIds()));
         }
 
-        if (request.getClusterNames() != null && !request.getClusterNames().isEmpty()) {
-            cond = cond.and(CLUSTERS.NAME.in(request.getClusterNames()));
+        if (filter != null && filter.getClusterNames() != null && !filter.getClusterNames().isEmpty()) {
+            cond = cond.and(CLUSTERS.NAME.in(filter.getClusterNames()));
         }
 
-        if (request.getSourceControlPlanes() != null && !request.getSourceControlPlanes().isEmpty()) {
+        if (filter != null && filter.getSourceControlPlanes() != null && !filter.getSourceControlPlanes().isEmpty()) {
             cond = cond.and(
                     CLUSTERS.CONTROL_PLANE_ID.in(
                             DSL.select(CONTROL_PLANES.ID)
                                     .from(CONTROL_PLANES)
-                                    .where(CONTROL_PLANES.NAME.in(request.getSourceControlPlanes()))));
+                                    .where(CONTROL_PLANES.NAME.in(filter.getSourceControlPlanes()))));
         }
 
-        if (request.getLabelSelectors() != null && !request.getLabelSelectors().isEmpty()) {
+        if (filter != null && filter.getLabelSelectors() != null && !filter.getLabelSelectors().isEmpty()) {
             Condition selectorOr = DSL.falseCondition();
-            for (Map<String, String> selector : request.getLabelSelectors()) {
+            for (Map<String, String> selector : filter.getLabelSelectors()) {
                 Condition selectorAnd = DSL.trueCondition();
                 for (Map.Entry<String, String> entry : selector.entrySet()) {
                     // Extract JSONB key: clusters.labels ->> ?
@@ -114,6 +117,31 @@ public class FailoverRepository {
                 .where(cond)
                 .orderBy(CLUSTERS.NAME)
                 .fetchInto(ClustersEntity.class);
+    }
+
+    /**
+     * Returns the count of non-tombstoned applications belonging to any of the given clusters.
+     *
+     * <p>Mirrors the WHERE clause used by {@link #migrateApplicationPartitionForCluster} exactly:
+     * {@code CLUSTER_ID IN (...) AND DELETED_AT IS NULL}. No additional status or deletion-mode
+     * filter is applied — in-flight HARD_DELETE apps are included because migration moves them too.
+     *
+     * <p>Used by the dry-run path to report how many applications would be affected by the
+     * failover without making any changes.
+     *
+     * @param clusterIds the resolved cluster IDs
+     * @return total application count; {@code 0} if the list is empty or no apps exist
+     */
+    public int countApplicationsForClusters(List<UUID> clusterIds) {
+        if (clusterIds == null || clusterIds.isEmpty()) {
+            return 0;
+        }
+        Integer count = dsl.select(DSL.count())
+                .from(APPLICATIONS)
+                .where(APPLICATIONS.CLUSTER_ID.in(clusterIds))
+                .and(APPLICATIONS.DELETED_AT.isNull())
+                .fetchOneInto(Integer.class);
+        return count != null ? count : 0;
     }
 
     /**
@@ -492,10 +520,9 @@ public class FailoverRepository {
      * Returns the maximum {@code migrated_at} timestamp across all {@code MIGRATED} cluster
      * rows in the given batch.
      *
-     * <p>This timestamp is used as the <em>timeout anchor</em> for the confirmation wait.
-     * Using {@code MAX(migrated_at)} rather than {@code failover_operations.updated_at}
-     * guarantees the timeout window is tied to the actual batch migration time and is not
-     * accidentally reset by incidental writes to the operation row.
+     * <p>Kept for diagnostic/logging purposes. For the actual timeout check prefer
+     * {@link #hasBatchTimedOut} which avoids JVM/DB timezone skew by keeping both sides
+     * of the comparison inside the database.
      *
      * @param operationId the parent operation UUID
      * @param batchNumber the 1-indexed batch number
@@ -511,6 +538,45 @@ public class FailoverRepository {
                 .fetchOne()
                 .value1();
         return Optional.ofNullable(result);
+    }
+
+    /**
+     * Returns {@code true} if the current batch has exceeded its timeout window.
+     *
+     * <p>The comparison is done entirely in the database
+     * ({@code LOCALTIMESTAMP > MAX(migrated_at) + N seconds}) to avoid the JVM/DB timezone
+     * skew that occurs when comparing {@code LocalDateTime.now()} (JVM-local) against a
+     * {@code LOCALTIMESTAMP}-written column (DB-local). When the two clocks differ by more
+     * than {@code batchTimeoutSeconds}, the Java-side comparison yields immediate spurious
+     * timeouts (JVM ahead of DB) or a permanently open window (JVM behind DB).
+     *
+     * <p>Returns {@code false} when there are no {@code MIGRATED} rows for the batch:
+     * {@code MAX(migrated_at)} is {@code NULL} → the boolean expression is {@code NULL} →
+     * treated as not timed out.
+     *
+     * @param operationId    the parent operation UUID
+     * @param batchNumber    the 1-indexed batch number
+     * @param timeoutSeconds timeout window in seconds
+     * @return {@code true} if {@code LOCALTIMESTAMP > MAX(migrated_at) + timeoutSeconds};
+     *         {@code false} otherwise (including the no-rows case)
+     */
+    public boolean hasBatchTimedOut(UUID operationId, int batchNumber, int timeoutSeconds) {
+        // Both LOCALTIMESTAMP and MIGRATED_AT are stamped with DSL.currentLocalDateTime()
+        // (→ SQL LOCALTIMESTAMP).  Keeping the comparison inside the DB means both sides
+        // share the same server clock — no cross-clock skew, regardless of JVM timezone.
+        Field<Boolean> timedOut = DSL.field(
+                "LOCALTIMESTAMP > MAX({0}) + ({1} * INTERVAL '1 second')",
+                Boolean.class,
+                FAILOVER_OPERATION_CLUSTERS.MIGRATED_AT,
+                DSL.val(timeoutSeconds));
+
+        return Boolean.TRUE.equals(
+                dsl.select(timedOut)
+                   .from(FAILOVER_OPERATION_CLUSTERS)
+                   .where(FAILOVER_OPERATION_CLUSTERS.OPERATION_ID.eq(operationId))
+                   .and(FAILOVER_OPERATION_CLUSTERS.BATCH_NUMBER.eq(batchNumber))
+                   .and(FAILOVER_OPERATION_CLUSTERS.STATUS.eq(FailoverClusterStatus.MIGRATED.name()))
+                   .fetchOneInto(Boolean.class));
     }
 
     /**
@@ -679,38 +745,6 @@ public class FailoverRepository {
                 .fetchOptional(APPLICATIONS.APPLICATION_PARTITION_ID);
     }
 
-    /**
-     * Records source and target partition IDs for a single cluster row in
-     * {@code failover_operation_clusters}.
-     *
-     * <p>Called after source IDs are captured but before migration runs, so that
-     * a crash between record and migrate can be detected (partition columns populated
-     * but {@code status} still {@code PENDING} / {@code cluster_partition_id} unchanged).
-     *
-     * @param operationId              the parent operation UUID
-     * @param clusterId                the cluster being migrated
-     * @param srcClusterPartitionId    CP1 cluster partition (for rollback)
-     * @param tgtClusterPartitionId    CP2 cluster partition (assigned by resolution)
-     * @param srcAppPartitionId        CP1 application partition; null if no active apps
-     * @param tgtAppPartitionId        CP2 application partition; null if no active apps
-     */
-    public void recordPartitionIds(
-            UUID operationId,
-            UUID clusterId,
-            UUID srcClusterPartitionId,
-            UUID tgtClusterPartitionId,
-            UUID srcAppPartitionId,
-            UUID tgtAppPartitionId) {
-        dsl.update(FAILOVER_OPERATION_CLUSTERS)
-                .set(FAILOVER_OPERATION_CLUSTERS.SOURCE_CLUSTER_PARTITION_ID, srcClusterPartitionId)
-                .set(FAILOVER_OPERATION_CLUSTERS.TARGET_CLUSTER_PARTITION_ID, tgtClusterPartitionId)
-                .set(FAILOVER_OPERATION_CLUSTERS.SOURCE_APPLICATION_PARTITION_ID, srcAppPartitionId)
-                .set(FAILOVER_OPERATION_CLUSTERS.TARGET_APPLICATION_PARTITION_ID, tgtAppPartitionId)
-                .where(FAILOVER_OPERATION_CLUSTERS.OPERATION_ID.eq(operationId))
-                .and(FAILOVER_OPERATION_CLUSTERS.CLUSTER_ID.eq(clusterId))
-                .execute();
-    }
-
     // =========================================================================
     // Batch scheduler — deletion guard (warn-only, Option B)
     // =========================================================================
@@ -867,72 +901,28 @@ public class FailoverRepository {
                 .fetch(FAILOVER_OPERATION_CLUSTERS.CLUSTER_ID);
     }
 
-    /**
-     * Projection used to retrieve stored partition tracking columns from
-     * {@code failover_operation_clusters} during retry (generation bump and cache events).
-     *
-     * @param clusterId                  the cluster UUID
-     * @param targetClusterPartitionId   the CP2 cluster partition assigned during migration;
-     *                                   may be null if partition recording was incomplete
-     * @param targetApplicationPartitionId the CP2 application partition; null if no active apps
-     */
-    public record PartitionTracking(
-            UUID clusterId,
-            UUID targetClusterPartitionId,
-            UUID targetApplicationPartitionId) {}
-
-    /**
-     * Returns the stored target partition IDs for the given cluster IDs within an operation.
-     *
-     * <p>Used by the retry path to know which CP2 partitions to bump and emit cache events for,
-     * without re-resolving partitions from scratch.
-     *
-     * @param operationId the parent operation UUID
-     * @param clusterIds  the clusters whose tracking data to fetch
-     * @return one {@link PartitionTracking} per cluster; empty if {@code clusterIds} is empty
-     */
-    public List<PartitionTracking> findPartitionTrackingForClusters(UUID operationId, List<UUID> clusterIds) {
-        if (clusterIds == null || clusterIds.isEmpty()) {
-            return List.of();
-        }
-        return dsl.select(
-                        FAILOVER_OPERATION_CLUSTERS.CLUSTER_ID,
-                        FAILOVER_OPERATION_CLUSTERS.TARGET_CLUSTER_PARTITION_ID,
-                        FAILOVER_OPERATION_CLUSTERS.TARGET_APPLICATION_PARTITION_ID)
-                .from(FAILOVER_OPERATION_CLUSTERS)
-                .where(FAILOVER_OPERATION_CLUSTERS.OPERATION_ID.eq(operationId))
-                .and(FAILOVER_OPERATION_CLUSTERS.CLUSTER_ID.in(clusterIds))
-                .fetch(r -> new PartitionTracking(
-                        r.get(FAILOVER_OPERATION_CLUSTERS.CLUSTER_ID),
-                        r.get(FAILOVER_OPERATION_CLUSTERS.TARGET_CLUSTER_PARTITION_ID),
-                        r.get(FAILOVER_OPERATION_CLUSTERS.TARGET_APPLICATION_PARTITION_ID)));
-    }
-
     // ---- Rollback ------------------------------------------------------------
 
     /**
-     * Projection carrying the pre-migration (source) and post-migration (target) partition IDs
-     * for a cluster row, read from {@code failover_operation_clusters}.
+     * Minimal projection for rollback: just the cluster UUID and its pre-migration source CP.
      *
-     * <p>Source values are the FK assignments captured <em>before</em> {@code migrateBatch()} ran
-     * (Step 5 of the migration flow). Target values are what was assigned during migration.
-     * Both are needed for rollback: source values are written back to the cluster/application FKs;
-     * both src and tgt partition IDs receive generation bumps to signal desired-state changes to ArgoCD.
+     * <p>Partition IDs are no longer stored — they are resolved dynamically at rollback time
+     * via {@link com.argocd.platform.api.service.PartitionService}:
+     * <ul>
+     *   <li>CP1 cluster partition: resolved via {@code resolveClusterPartitionForCp(srcCpId)}</li>
+     *   <li>CP1 app partition: resolved via {@code findApplicationPartitionForCluster(clusterId, srcCpId)}
+     *       (idempotency on retry-of-rollback), falling back to {@code resolveApplicationPartitionForCp}</li>
+     *   <li>CP2 partitions: read live from {@code clusters.cluster_partition_id} and
+     *       {@code applications.application_partition_id} via
+     *       {@code getCurrentClusterPartitionId} / {@code getCurrentApplicationPartitionIdForCluster}</li>
+     * </ul>
      *
-     * @param clusterId                    the cluster UUID
-     * @param sourceControlPlaneId         CP1 — destination after rollback
-     * @param sourceClusterPartitionId     CP1 cluster partition; null only if recording was incomplete
-     * @param sourceApplicationPartitionId CP1 application partition; null if cluster had no active apps
-     * @param targetClusterPartitionId     CP2 cluster partition assigned by the migration
-     * @param targetApplicationPartitionId CP2 application partition; null if cluster had no active apps
+     * @param clusterId          the cluster UUID
+     * @param sourceControlPlaneId CP1 — the CP to restore the cluster to
      */
     public record RollbackTarget(
             UUID clusterId,
-            UUID sourceControlPlaneId,
-            UUID sourceClusterPartitionId,
-            UUID sourceApplicationPartitionId,
-            UUID targetClusterPartitionId,
-            UUID targetApplicationPartitionId) {}
+            UUID sourceControlPlaneId) {}
 
     /**
      * Returns all cluster rows that were <em>actually migrated</em> (status = MIGRATED, CONFIRMED,
@@ -948,11 +938,7 @@ public class FailoverRepository {
     public List<RollbackTarget> findRollbackTargets(UUID operationId) {
         return dsl.select(
                         FAILOVER_OPERATION_CLUSTERS.CLUSTER_ID,
-                        FAILOVER_OPERATION_CLUSTERS.SOURCE_CONTROL_PLANE_ID,
-                        FAILOVER_OPERATION_CLUSTERS.SOURCE_CLUSTER_PARTITION_ID,
-                        FAILOVER_OPERATION_CLUSTERS.SOURCE_APPLICATION_PARTITION_ID,
-                        FAILOVER_OPERATION_CLUSTERS.TARGET_CLUSTER_PARTITION_ID,
-                        FAILOVER_OPERATION_CLUSTERS.TARGET_APPLICATION_PARTITION_ID)
+                        FAILOVER_OPERATION_CLUSTERS.SOURCE_CONTROL_PLANE_ID)
                 .from(FAILOVER_OPERATION_CLUSTERS)
                 .where(FAILOVER_OPERATION_CLUSTERS.OPERATION_ID.eq(operationId))
                 .and(FAILOVER_OPERATION_CLUSTERS.STATUS.in(
@@ -962,20 +948,17 @@ public class FailoverRepository {
                 .orderBy(FAILOVER_OPERATION_CLUSTERS.CLUSTER_ID)
                 .fetch(r -> new RollbackTarget(
                         r.get(FAILOVER_OPERATION_CLUSTERS.CLUSTER_ID),
-                        r.get(FAILOVER_OPERATION_CLUSTERS.SOURCE_CONTROL_PLANE_ID),
-                        r.get(FAILOVER_OPERATION_CLUSTERS.SOURCE_CLUSTER_PARTITION_ID),
-                        r.get(FAILOVER_OPERATION_CLUSTERS.SOURCE_APPLICATION_PARTITION_ID),
-                        r.get(FAILOVER_OPERATION_CLUSTERS.TARGET_CLUSTER_PARTITION_ID),
-                        r.get(FAILOVER_OPERATION_CLUSTERS.TARGET_APPLICATION_PARTITION_ID)));
+                        r.get(FAILOVER_OPERATION_CLUSTERS.SOURCE_CONTROL_PLANE_ID)));
     }
 
     /**
      * Restores a single cluster's {@code control_plane_id} and {@code cluster_partition_id}
-     * to their pre-migration values.
+     * to their pre-migration (CP1) values.
      *
-     * <p>Called during rollback, once per migrated cluster. The source values were captured
-     * in {@code failover_operation_clusters.source_cluster_partition_id} and
-     * {@code source_control_plane_id} by {@code FailoverBatchService.migrateBatch()} Step 5.
+     * <p>Called during rollback, once per migrated cluster. The CP1 cluster partition ID is
+     * resolved dynamically by {@code FailoverBatchService.processRollback()} via
+     * {@link com.argocd.platform.api.service.PartitionService#resolveClusterPartitionForCp}
+     * rather than read from a stored column.
      *
      * @param clusterId              the cluster to restore
      * @param srcControlPlaneId      CP1 ID to restore to

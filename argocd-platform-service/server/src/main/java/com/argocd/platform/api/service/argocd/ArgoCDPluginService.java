@@ -136,7 +136,7 @@ public class ArgoCDPluginService implements PluginExecutor {
                         "No control plane found with name: " + cpName))
                 .getId();
 
-        UUID partitionId = partitionService.findClusterPartitionIdByCpAndNumber(cpId, partitionNumber)
+        UUID partitionId = partitionService.findClusterPartitionIdByCpAndNumber(cpId, partitionNumber, cpName)
                 .orElseThrow(() -> new InvalidRequestException(
                         "No cluster partition found with partitionNumber=" + partitionNumber +
                         " and cpName=" + cpName));
@@ -290,7 +290,7 @@ public class ArgoCDPluginService implements PluginExecutor {
                         "No control plane found with name: " + cpName))
                 .getId();
 
-        UUID partitionId = partitionService.findApplicationPartitionIdByCpAndNumber(cpId, partitionNumber)
+        UUID partitionId = partitionService.findApplicationPartitionIdByCpAndNumber(cpId, partitionNumber, cpName)
                 .orElseThrow(() -> new InvalidRequestException(
                         "No application partition found with partitionNumber=" + partitionNumber +
                         " and cpName=" + cpName));

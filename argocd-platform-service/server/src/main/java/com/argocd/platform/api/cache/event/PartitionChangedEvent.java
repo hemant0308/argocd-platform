@@ -1,6 +1,7 @@
 package com.argocd.platform.api.cache.event;
 
 import com.argocd.platform.api.util.PartitionType;
+import lombok.Getter;
 import org.springframework.context.ApplicationEvent;
 
 import java.util.UUID;
@@ -19,6 +20,7 @@ import java.util.UUID;
  * ArgoCD ApplicationSet refresh stubs) receive the same event without coupling
  * to the cache feature flag.
  */
+@Getter
 public class PartitionChangedEvent extends ApplicationEvent {
 
     /**
@@ -44,11 +46,4 @@ public class PartitionChangedEvent extends ApplicationEvent {
         this.partitionType = partitionType;
     }
 
-    public UUID getPartitionId() {
-        return partitionId;
-    }
-
-    public PartitionType getPartitionType() {
-        return partitionType;
-    }
 }

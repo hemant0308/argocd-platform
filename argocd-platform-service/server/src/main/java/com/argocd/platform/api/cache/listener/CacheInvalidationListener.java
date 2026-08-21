@@ -3,6 +3,7 @@ package com.argocd.platform.api.cache.listener;
 import com.argocd.platform.api.cache.PluginCacheService;
 import com.argocd.platform.api.cache.event.PartitionChangedEvent;
 import com.argocd.platform.api.service.PartitionService;
+import com.argocd.platform.api.util.PartitionType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -21,8 +22,11 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * <ul>
  *   <li>When {@code partitionId} is non-null the listener evicts two keys:
  *     <ol>
- *       <li>{@code <type>-groups:<number>} — the partition-specific data used by
- *           ArgoCD per-partition ApplicationSets (e.g. {@code cluster-groups:3}).</li>
+ *       <li>CP-scoped group key — for {@code CLUSTER} and {@code APPLICATION} types:
+ *           {@code <type>-groups:<number>:<cpName>} (e.g. {@code cluster-groups:3:cp-prod}).
+ *           The key format is shared with {@link PluginCacheService#buildGroupsCacheKey}
+ *           to guarantee write and eviction keys are byte-for-byte identical.
+ *           For {@code PROJECT} (global): {@code project-groups:<number>} (no CP suffix).</li>
  *       <li>{@code <type>-partitions:all} — the partition list used by the top-level
  *           ApplicationSet (generation and count changed).</li>
  *     </ol>
@@ -31,8 +35,9 @@ import org.springframework.transaction.event.TransactionalEventListener;
  *       is cleared because CP changes affect all partition types simultaneously.</li>
  * </ul>
  *
- * <p>If the partition number cannot be resolved (data anomaly) the listener falls
- * back to a full cache clear so ArgoCD never serves permanently stale data.
+ * <p>If the partition number cannot be resolved (data anomaly), or if a CP-scoped
+ * partition's {@code cpName} is null (should not happen under normal operation), the
+ * listener falls back to a full cache clear so ArgoCD never serves permanently stale data.
  */
 @Slf4j
 @Component
@@ -71,8 +76,28 @@ public class CacheInvalidationListener {
     private void evictPartitionKeys(Cache cache, PartitionService.PartitionKey pk) {
         String typePrefix = pk.type().name().toLowerCase(); // "cluster", "project", "application"
 
-        // Evict the partition-specific group entry (e.g. cluster-groups:3)
-        String groupKey = typePrefix + "-groups:" + pk.number();
+        // CP-scoped group resources (CLUSTER, APPLICATION) require cpName in the key to
+        // prevent evicting the wrong CP's entry when two CPs share the same partition number
+        // (Option B). Uses PluginCacheService.buildGroupsCacheKey so write-side and
+        // eviction-side keys are always byte-for-byte identical.
+        //
+        // PROJECT partitions are global (no CP) — plain "project-groups:{number}" key.
+        String groupKey;
+        if (pk.type() == PartitionType.PROJECT) {
+            groupKey = typePrefix + "-groups:" + pk.number();
+        } else if (pk.cpName() != null) {
+            groupKey = PluginCacheService.buildGroupsCacheKey(
+                    typePrefix + "-groups",
+                    String.valueOf(pk.number()),
+                    pk.cpName());
+        } else {
+            // cpName is null for a CP-scoped partition — data anomaly.
+            // The correct targeted key cannot be constructed; full-clear to be safe.
+            log.warn("CP-scoped partition (type={}, number={}) has null cpName in reverse cache — " +
+                     "clearing entire cache as safety fallback", pk.type(), pk.number());
+            cache.clear();
+            return;
+        }
         cache.evict(groupKey);
         log.debug("Evicted cache key '{}'", groupKey);
 

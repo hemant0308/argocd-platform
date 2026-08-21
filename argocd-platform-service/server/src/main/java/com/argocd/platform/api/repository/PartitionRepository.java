@@ -12,6 +12,8 @@ import org.jooq.impl.DSL;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import jakarta.annotation.Nullable;
+
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -355,12 +357,69 @@ public class PartitionRepository {
     // =========================================================================
 
     /**
+     * Lightweight projection returned by {@link #findPartitionInfoById}.
+     * Carries the partition number and, for CP-scoped types (CLUSTER, APPLICATION),
+     * the canonical name of the owning control plane (selected from
+     * {@code CONTROL_PLANES.NAME} — same string used by the plugin request parameter
+     * {@code cpName} and by {@link #findAllClusterPartitions}/{@link #findAllApplicationPartitions}).
+     *
+     * @param number  {@code partition_number} column value
+     * @param cpName  {@code CONTROL_PLANES.NAME} for CP-scoped types; {@code null} for PROJECT
+     */
+    public record PartitionInfo(int number, @Nullable String cpName) {}
+
+    /**
+     * Resolves both the partition number and the owning control-plane name for a given
+     * partition UUID.  For CP-scoped types (CLUSTER, APPLICATION) the result carries
+     * a non-null {@code cpName} obtained via an inner join with {@code CONTROL_PLANES}.
+     * For PROJECT the join is omitted and {@code cpName} is null.
+     *
+     * <p>Used by {@link com.argocd.platform.api.service.PartitionService#findPartitionKey}
+     * to populate the reverse cache with enough information for
+     * {@link com.argocd.platform.api.cache.listener.CacheInvalidationListener} to build
+     * the correct CP-scoped Redis eviction key (e.g. {@code cluster-groups:1:cp-name}).
+     *
+     * @return the partition info, or empty if no partition with that id exists
+     */
+    @Transactional(readOnly = true)
+    public Optional<PartitionInfo> findPartitionInfoById(PartitionType type, UUID id) {
+        return switch (type) {
+            case CLUSTER -> dsl
+                    .select(CLUSTER_PARTITIONS.PARTITION_NUMBER, CONTROL_PLANES.NAME)
+                    .from(CLUSTER_PARTITIONS)
+                    .join(CONTROL_PLANES).on(CONTROL_PLANES.ID.eq(CLUSTER_PARTITIONS.CONTROL_PLANE_ID))
+                    .where(CLUSTER_PARTITIONS.ID.eq(id))
+                    .fetchOptional(r -> new PartitionInfo(
+                            r.get(CLUSTER_PARTITIONS.PARTITION_NUMBER),
+                            r.get(CONTROL_PLANES.NAME)));
+            case APPLICATION -> dsl
+                    .select(APPLICATION_PARTITIONS.PARTITION_NUMBER, CONTROL_PLANES.NAME)
+                    .from(APPLICATION_PARTITIONS)
+                    .join(CONTROL_PLANES).on(CONTROL_PLANES.ID.eq(APPLICATION_PARTITIONS.CONTROL_PLANE_ID))
+                    .where(APPLICATION_PARTITIONS.ID.eq(id))
+                    .fetchOptional(r -> new PartitionInfo(
+                            r.get(APPLICATION_PARTITIONS.PARTITION_NUMBER),
+                            r.get(CONTROL_PLANES.NAME)));
+            case PROJECT -> dsl
+                    .select(PROJECT_PARTITIONS.PARTITION_NUMBER)
+                    .from(PROJECT_PARTITIONS)
+                    .where(PROJECT_PARTITIONS.ID.eq(id))
+                    .fetchOptional(r -> new PartitionInfo(
+                            r.get(PROJECT_PARTITIONS.PARTITION_NUMBER),
+                            null));
+        };
+    }
+
+    /**
      * Resolves a partition number by its UUID.
      * Used by {@link com.argocd.platform.api.service.PartitionService} to populate the
      * reverse cache when a new partition UUID is seen for the first time.
      *
      * @return the partition_number, or empty if no partition with that id exists
+     * @deprecated prefer {@link #findPartitionInfoById} which also returns the CP name
+     *             needed for correct Option B cache-key construction.
      */
+    @Deprecated
     @Transactional(readOnly = true)
     public Optional<Integer> findPartitionNumberById(PartitionType type, UUID id) {
         return switch (type) {

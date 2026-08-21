@@ -2135,7 +2135,57 @@ Users may provide additional AppProject spec fields via the platform API. The me
 
 ---
 
-## 32.14 Application Deletion State Machine
+## 32.14 Failover — AppProject Deletion / Recreation Race Condition
+
+### Issue
+
+During failover, a race condition between CP1 cleanup and CP2 onboarding causes ArgoCD Applications to get stuck in `Unknown` state and blocks AppProject recreation.
+
+**Root cause chain:**
+
+1. `migrateBatch()` bumps both CP1 and CP2 partition generations **in the same transaction and simultaneously**. There is no ordered handoff window between the two.
+2. CP1's ApplicationSet controller immediately reads the updated plugin response, sees the migrated cluster is gone, and starts deleting the AppProject for that cluster.
+3. ArgoCD cannot delete an AppProject while Applications are still bound to it (ArgoCD enforces this regardless of how the Applications were created). The deletion enters a permanent `Terminating` state.
+4. CP2 attempts to create the AppProject for the same cluster. Either the creation is blocked by a name collision (if both sides share state), or the AppProject is created but the cluster is not yet registered as a valid destination in CP2's ArgoCD (`Secret` of type `cluster` not yet present).
+5. Applications on CP2 reference an AppProject with no valid destination → go `Unknown`.
+6. ArgoCD keeps reconciling; no progress. The operation loops.
+
+**Specific conditions that trigger this:**
+
+| Condition | Effect |
+|---|---|
+| AppProject has `resources-finalizer.argocd.argoproj.io` | Deletion cascades to child apps; blocks until all apps deleted |
+| Applications in the project were not created by the same ApplicationSet | ArgoCD cannot auto-cascade delete them → AppProject stuck `Terminating` |
+| Cluster Secret not yet registered on CP2 at time of CP2 AppProject creation | AppProject destination is invalid → apps `Unknown` |
+| Rollback attempted during this window | CP1 AppProject is `Terminating`; platform tries to restore FK → ArgoCD conflicts |
+
+**What to verify in the cluster when this occurs:**
+
+```bash
+# Stuck AppProject in Terminating on CP1
+kubectl get appproject -n argocd | grep Terminating
+
+# See what finalizer / Applications are blocking deletion
+kubectl describe appproject <name> -n argocd
+
+# Confirm cluster Secret exists on CP2
+kubectl get secret -n argocd -l argocd.argoproj.io/secret-type=cluster
+```
+
+**Proposed fix (not yet implemented):**
+
+Replace the current simultaneous generation-bump approach with a two-phase handoff:
+
+- **Phase 1:** Register the cluster on CP2's ArgoCD (create the cluster `Secret`), bump only the CP2 partition generation, and wait for the CP2 AppProject and Applications to reach `Healthy/Synced` (this can use the existing confirmation gate).
+- **Phase 2:** Only after CP2 confirms healthy, bump the CP1 partition generation to trigger CP1 cleanup.
+
+This keeps the CP1 AppProject alive until CP2 is fully ready, eliminating the deletion/recreation race. The `processAwaitingOperation` confirmation poller already checks application sync status — it needs to be extended to also verify CP1 cleanup has completed (or the two-phase split handles this by construction).
+
+**Note on scope:** The current confirmation gate (`applications.updated_at > migrated_at`) only checks CP2 application status, not whether CP1 has cleanly removed the cluster. The two-phase fix addresses both gaps.
+
+---
+
+## 32.15 Application Deletion State Machine
 
 > **Status: ✅ Completed** — A two-mode deletion state machine governs safe removal of applications from the platform and their corresponding ArgoCD Application resources on control planes.
 

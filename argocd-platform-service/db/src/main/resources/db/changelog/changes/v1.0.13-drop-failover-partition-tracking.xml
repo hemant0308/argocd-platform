@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
+
+    <!-- =========================================================
+         Remove partition tracking columns from failover_operation_clusters.
+
+         Partition IDs are now resolved dynamically at rollback/retry time:
+           - Retry: reads clusters.cluster_partition_id and
+             applications.application_partition_id directly — they already
+             point to the CP2 partitions after a successful migrateBatch().
+           - Rollback: uses resolveClusterPartitionForCp /
+             findApplicationPartitionForCluster (falling back to
+             resolveApplicationPartitionForCp) to derive CP1 partition IDs
+             without having stored them.
+
+         This is safe because migrateBatch() bumps the generation on BOTH
+         the source (CP1) and target (CP2) partitions, so ArgoCD already
+         reconciled CP1's desired state during the forward pass. Rollback
+         therefore only needs to move the cluster FK back and bump
+         generations again — it does not need the exact pre-migration
+         partition UUID.
+
+         Drop FK constraints first, then the columns themselves.
+         ========================================================= -->
+
+    <changeSet id="v1.0.13-drop-foc-partition-fks" author="argocd-platform">
+        <dropForeignKeyConstraint baseTableName="failover_operation_clusters"
+                                  constraintName="fk_foc_src_cluster_partition"/>
+        <dropForeignKeyConstraint baseTableName="failover_operation_clusters"
+                                  constraintName="fk_foc_tgt_cluster_partition"/>
+        <dropForeignKeyConstraint baseTableName="failover_operation_clusters"
+                                  constraintName="fk_foc_src_app_partition"/>
+        <dropForeignKeyConstraint baseTableName="failover_operation_clusters"
+                                  constraintName="fk_foc_tgt_app_partition"/>
+
+        <rollback>
+            <addForeignKeyConstraint
+                    baseTableName="failover_operation_clusters"
+                    baseColumnNames="source_cluster_partition_id"
+                    referencedTableName="cluster_partitions"
+                    referencedColumnNames="id"
+                    constraintName="fk_foc_src_cluster_partition"/>
+            <addForeignKeyConstraint
+                    baseTableName="failover_operation_clusters"
+                    baseColumnNames="target_cluster_partition_id"
+                    referencedTableName="cluster_partitions"
+                    referencedColumnNames="id"
+                    constraintName="fk_foc_tgt_cluster_partition"/>
+            <addForeignKeyConstraint
+                    baseTableName="failover_operation_clusters"
+                    baseColumnNames="source_application_partition_id"
+                    referencedTableName="application_partitions"
+                    referencedColumnNames="id"
+                    constraintName="fk_foc_src_app_partition"/>
+            <addForeignKeyConstraint
+                    baseTableName="failover_operation_clusters"
+                    baseColumnNames="target_application_partition_id"
+                    referencedTableName="application_partitions"
+                    referencedColumnNames="id"
+                    constraintName="fk_foc_tgt_app_partition"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.13-drop-foc-partition-columns" author="argocd-platform">
+        <dropColumn tableName="failover_operation_clusters" columnName="source_cluster_partition_id"/>
+        <dropColumn tableName="failover_operation_clusters" columnName="target_cluster_partition_id"/>
+        <dropColumn tableName="failover_operation_clusters" columnName="source_application_partition_id"/>
+        <dropColumn tableName="failover_operation_clusters" columnName="target_application_partition_id"/>
+
+        <rollback>
+            <addColumn tableName="failover_operation_clusters">
+                <column name="source_cluster_partition_id" type="UUID">
+                    <constraints nullable="true"/>
+                </column>
+            </addColumn>
+            <addColumn tableName="failover_operation_clusters">
+                <column name="target_cluster_partition_id" type="UUID">
+                    <constraints nullable="true"/>
+                </column>
+            </addColumn>
+            <addColumn tableName="failover_operation_clusters">
+                <column name="source_application_partition_id" type="UUID">
+                    <constraints nullable="true"/>
+                </column>
+            </addColumn>
+            <addColumn tableName="failover_operation_clusters">
+                <column name="target_application_partition_id" type="UUID">
+                    <constraints nullable="true"/>
+                </column>
+            </addColumn>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

@@ -69,6 +69,13 @@ public class FailoverResponse {
     private int batchTimeoutSeconds;
 
     /**
+     * Total number of non-tombstoned applications across all resolved clusters that
+     * would be migrated by this operation. Populated only on dry-run responses;
+     * {@code null} for real operations and GET responses.
+     */
+    private Integer totalApplications;
+
+    /**
      * Per-cluster batch assignments and migration state.
      * Ordered by batch number, then cluster name.
      * On dry-run responses the {@code status} field of each item is {@code null}.

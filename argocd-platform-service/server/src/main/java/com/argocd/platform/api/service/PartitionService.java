@@ -46,15 +46,21 @@ public class PartitionService {
      * Immutable identifier for a partition.
      *
      * <p>For CP-scoped types ({@code CLUSTER}, {@code APPLICATION}), {@code cpId} is
-     * the owning control plane's UUID. For {@code PROJECT} (global), {@code cpId} is null.
+     * the owning control plane's UUID and {@code cpName} is its canonical name
+     * (matches {@code CONTROL_PLANES.NAME} and the Helm/plugin {@code cpName} parameter).
+     * For {@code PROJECT} (global), both {@code cpId} and {@code cpName} are null.
      *
-     * <p>The cache-invalidation listener uses {@code cpId} to derive the exact Redis key:
-     * {@code "cluster-partition:{cpName}:{number}"}.
+     * <p>The cache-invalidation listener uses {@code cpName} to derive the exact Redis key,
+     * e.g. {@code "cluster-groups:1:cp-prod"}.  Both fields are populated on the
+     * read path; only {@code cpId} is populated on the forward-cache path (the reverse cache
+     * always has {@code cpName} populated after the first call to either
+     * {@link #findClusterPartitionIdByCpAndNumber} or {@link #findPartitionKey}).
      */
-    public record PartitionKey(PartitionType type, int number, @Nullable UUID cpId) {
+    public record PartitionKey(PartitionType type, int number, @Nullable UUID cpId,
+                               @Nullable String cpName) {
         /** Convenience constructor for global (project) partitions. */
         public PartitionKey(PartitionType type, int number) {
-            this(type, number, null);
+            this(type, number, null, null);
         }
     }
 
@@ -135,20 +141,35 @@ public class PartitionService {
     // =========================================================================
 
     /**
-     * Resolves a cluster partition UUID by CP id and partition number.
+     * Resolves a cluster partition UUID by CP id, partition number, and CP name.
      * Under Option B, partition numbers are unique per-CP — both cpId and number
      * are required to identify a partition.
+     *
+     * <p>{@code cpName} is threaded through to the reverse-cache entry so the
+     * {@link com.argocd.platform.api.cache.listener.CacheInvalidationListener} can build
+     * the correct eviction key ({@code cluster-groups:{number}:{cpName}}) without an
+     * extra DB round-trip.
+     *
+     * @param cpId          owning control plane UUID
+     * @param partitionNumber partition number (unique within the CP)
+     * @param cpName        canonical CP name — must match {@code CONTROL_PLANES.NAME}
      */
-    public Optional<UUID> findClusterPartitionIdByCpAndNumber(UUID cpId, int partitionNumber) {
-        return findByNumber(PartitionType.CLUSTER, cpId, partitionNumber,
+    public Optional<UUID> findClusterPartitionIdByCpAndNumber(UUID cpId, int partitionNumber,
+                                                              String cpName) {
+        return findByNumber(PartitionType.CLUSTER, cpId, cpName, partitionNumber,
                 () -> partitionRepository.findClusterPartitionIdByCpAndNumber(cpId, partitionNumber));
     }
 
     /**
-     * Resolves an application partition UUID by CP id and partition number.
+     * Resolves an application partition UUID by CP id, partition number, and CP name.
+     *
+     * @param cpId          owning control plane UUID
+     * @param partitionNumber partition number (unique within the CP)
+     * @param cpName        canonical CP name — must match {@code CONTROL_PLANES.NAME}
      */
-    public Optional<UUID> findApplicationPartitionIdByCpAndNumber(UUID cpId, int partitionNumber) {
-        return findByNumber(PartitionType.APPLICATION, cpId, partitionNumber,
+    public Optional<UUID> findApplicationPartitionIdByCpAndNumber(UUID cpId, int partitionNumber,
+                                                                  String cpName) {
+        return findByNumber(PartitionType.APPLICATION, cpId, cpName, partitionNumber,
                 () -> partitionRepository.findApplicationPartitionIdByCpAndNumber(cpId, partitionNumber));
     }
 
@@ -157,7 +178,7 @@ public class PartitionService {
     // =========================================================================
 
     public Optional<UUID> findProjectPartitionIdByNumber(int partitionNumber) {
-        return findByNumber(PartitionType.PROJECT, null, partitionNumber,
+        return findByNumber(PartitionType.PROJECT, null, null, partitionNumber,
                 () -> partitionRepository.findProjectPartitionIdByNumber(partitionNumber));
     }
 
@@ -167,25 +188,32 @@ public class PartitionService {
 
     /**
      * Translates a partition UUID to its {@link PartitionKey}.
-     * Checks the in-memory reverse cache first; falls back to a DB query on miss
-     * and populates both forward and reverse caches with the result.
+     * Checks the in-memory reverse cache first; falls back to
+     * {@link PartitionRepository#findPartitionInfoById} on miss (or when a cached entry
+     * has {@code cpName=null} for a CP-scoped type — a stale entry written before
+     * {@code cpName} was threaded through the forward-cache path).
      *
-     * <p>For CP-scoped types the returned key contains {@code cpId}; the listener
-     * uses it to build the Redis key {@code "cluster-partition:{cpName}:{number}"}.
+     * <p>For CP-scoped types the returned key always contains a non-null {@code cpName}.
+     * The cache-invalidation listener uses it to build the correct Redis eviction key,
+     * e.g. {@code "cluster-groups:1:cp-prod"}.
      *
      * @return empty if no partition with the given id exists (data anomaly)
      */
     public Optional<PartitionKey> findPartitionKey(PartitionType type, UUID partitionId) {
         PartitionKey cached = reverseCache.get(partitionId);
-        if (cached != null) {
+        // For CP-scoped types a cached entry with cpName=null is not usable by the
+        // invalidation listener — fall through to the DB to get the canonical name.
+        // Project partitions never need cpName, so a non-null cached entry is always valid.
+        if (cached != null && (type == PartitionType.PROJECT || cached.cpName() != null)) {
             return Optional.of(cached);
         }
-        return partitionRepository.findPartitionNumberById(type, partitionId)
-                .map(number -> {
-                    // For CP-scoped types we store cpId=null here as a sentinel — the
-                    // listener must do a separate lookup for cpName from the UUID if needed.
-                    // cpId will be populated on the next findClusterPartitionIdByCpAndNumber call.
-                    PartitionKey pk = new PartitionKey(type, number);
+        return partitionRepository.findPartitionInfoById(type, partitionId)
+                .map(info -> {
+                    // cpId is intentionally left null here: this path is invoked by the
+                    // cache-invalidation listener which only needs cpName for key construction.
+                    // cpId is populated via the forward-cache path
+                    // (findClusterPartitionIdByCpAndNumber / findApplicationPartitionIdByCpAndNumber).
+                    PartitionKey pk = new PartitionKey(type, info.number(), null, info.cpName());
                     reverseCache.put(partitionId, pk);
                     return pk;
                 });
@@ -257,20 +285,32 @@ public class PartitionService {
     // =========================================================================
 
     /**
-     * @param cpId null for global (project) partitions; non-null for CP-scoped types
+     * @param cpId   null for global (project) partitions; non-null for CP-scoped types
+     * @param cpName canonical control plane name; null for PROJECT partitions.
+     *               Stored in the reverse-cache entry so the invalidation listener can
+     *               build the CP-scoped Redis key without an extra DB round-trip.
+     *               If the entry already exists with a non-null cpName it is left unchanged.
      */
     private Optional<UUID> findByNumber(PartitionType type, @Nullable UUID cpId,
+                                        @Nullable String cpName,
                                         int number, Supplier<Optional<UUID>> dbQuery) {
         String key = forwardKey(type, cpId, number);
         UUID cached = forwardCache.get(key);
         if (cached != null) {
+            // Re-stamp cpName in the reverse cache if the existing entry lacks it.
+            // This handles the case where the partition was cached before cpName was
+            // threaded through (e.g. warm-up ordering differences).
+            reverseCache.compute(cached, (id, existing) ->
+                    (existing != null && existing.cpName() != null)
+                            ? existing
+                            : new PartitionKey(type, number, cpId, cpName));
             return Optional.of(cached);
         }
         // Cache misses are NOT stored — a not-yet-created partition returns empty until
         // the partition exists in the DB.
         return dbQuery.get().map(id -> {
             forwardCache.put(key, id);
-            reverseCache.put(id, new PartitionKey(type, number, cpId));
+            reverseCache.put(id, new PartitionKey(type, number, cpId, cpName));
             return id;
         });
     }

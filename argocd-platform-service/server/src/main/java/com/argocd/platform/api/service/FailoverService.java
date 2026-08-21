@@ -152,8 +152,9 @@ public class FailoverService {
 
         // 8. Dry run: no DB writes — return ephemeral plan immediately
         if (request.isDryRun()) {
-            log.info("Dry-run failover: target={}, clusters={}, batches={}",
-                    request.getTargetControlPlane(), clusters.size(), totalBatches);
+            int totalApplications = failoverRepository.countApplicationsForClusters(clusterIds);
+            log.info("Dry-run failover: target={}, clusters={}, batches={}, applications={}",
+                    request.getTargetControlPlane(), clusters.size(), totalBatches, totalApplications);
             return FailoverResponse.builder()
                     .operationId(null)
                     .status(FailoverOperationStatus.COMPLETED.name())
@@ -166,6 +167,7 @@ public class FailoverService {
                     .successCondition(successCondition.name())
                     .dryRun(true)
                     .batchTimeoutSeconds(batchTimeoutSeconds)
+                    .totalApplications(totalApplications)
                     .clusters(batchItems)
                     .build();
         }
@@ -370,16 +372,17 @@ public class FailoverService {
      * @throws InvalidRequestException if all filter fields are null or empty
      */
     private void validateHasFilter(FailoverRequest request) {
-        boolean hasFilter =
-                (request.getClusterIds() != null && !request.getClusterIds().isEmpty()) ||
-                (request.getClusterNames() != null && !request.getClusterNames().isEmpty()) ||
-                (request.getLabelSelectors() != null && !request.getLabelSelectors().isEmpty()) ||
-                (request.getSourceControlPlanes() != null && !request.getSourceControlPlanes().isEmpty());
+        var filter = request.getFilter();
+        boolean hasFilter = filter != null && (
+                (filter.getClusterIds() != null && !filter.getClusterIds().isEmpty()) ||
+                (filter.getClusterNames() != null && !filter.getClusterNames().isEmpty()) ||
+                (filter.getLabelSelectors() != null && !filter.getLabelSelectors().isEmpty()) ||
+                (filter.getSourceControlPlanes() != null && !filter.getSourceControlPlanes().isEmpty()));
 
         if (!hasFilter) {
             throw new InvalidRequestException(
-                    "At least one filter field must be specified: clusterIds, clusterNames, " +
-                    "labelSelectors, or sourceControlPlanes");
+                    "At least one filter field must be specified inside 'filter': " +
+                    "clusterIds, clusterNames, labelSelectors, or sourceControlPlanes");
         }
     }
 }
