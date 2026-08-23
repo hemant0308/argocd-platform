@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Managed ArgoCD Platform — Overview</title>
+  <style>
+    :root {
+      --wm-blue:    #0071CE;
+      --wm-blue-dk: #005ba1;
+      --wm-dark:    #041E42;
+      --wm-yellow:  #FFC220;
+      --wm-green:   #00A651;
+      --wm-red:     #CC0000;
+      --bg:         #f5f7fa;
+      --surface:    #ffffff;
+      --border:     #e1e8f0;
+      --text:       #1a2332;
+      --muted:      #5a6a7e;
+      --accent-bg:  #e8f4fd;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    /* ── HEADER ── */
+    header {
+      background: var(--wm-dark);
+      padding: 40px 60px 36px;
+      position: relative;
+      overflow: hidden;
+    }
+    header::after {
+      content: '';
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 4px;
+      background: linear-gradient(90deg, var(--wm-blue) 0%, var(--wm-yellow) 100%);
+    }
+    header .eyebrow {
+      color: var(--wm-yellow);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+    }
+    header h1 {
+      color: #fff;
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      margin-bottom: 10px;
+    }
+    header p {
+      color: #9cb3cc;
+      font-size: 15px;
+      max-width: 560px;
+    }
+    .header-badges {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+    .hbadge {
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: #fff;
+      font-size: 12px;
+      padding: 4px 14px;
+      border-radius: 20px;
+      font-weight: 500;
+    }
+    .hbadge.green { background: rgba(0,166,81,0.2); border-color: rgba(0,166,81,0.5); color: #6ee7b7; }
+
+    /* ── LAYOUT ── */
+    .page { max-width: 1060px; margin: 0 auto; padding: 48px 32px; }
+
+    /* ── SECTION HEADER ── */
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .section-icon {
+      width: 36px; height: 36px;
+      background: var(--wm-blue);
+      color: #fff;
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 17px;
+      flex-shrink: 0;
+    }
+    .section-header h2 {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--wm-dark);
+    }
+    .section-header .sub {
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 1px;
+    }
+
+    section { margin-bottom: 56px; }
+
+    /* ── CARD ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px 28px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    }
+
+    /* ── PROBLEM CARDS ── */
+    .problem-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    .problem-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-top: 3px solid var(--wm-red);
+      border-radius: 10px;
+      padding: 20px 22px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .problem-card h3 {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--wm-red);
+      margin-bottom: 8px;
+    }
+    .problem-card p {
+      font-size: 13.5px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+    .problem-stat {
+      font-size: 28px;
+      font-weight: 800;
+      color: var(--wm-dark);
+      margin-bottom: 4px;
+    }
+    .problem-stat span {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--muted);
+    }
+
+    /* ── ARCH DIAGRAM ── */
+    .arch-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+      overflow-x: auto;
+    }
+
+    /* ── SOLUTION PILLARS ── */
+    .pillars {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+    .pillar {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--wm-blue);
+      border-radius: 0 10px 10px 0;
+      padding: 20px 22px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .pillar h3 {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--wm-dark);
+      margin-bottom: 6px;
+    }
+    .pillar p {
+      font-size: 13.5px;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+    .pillar .pill-label {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: var(--wm-blue);
+      background: var(--accent-bg);
+      border-radius: 4px;
+      padding: 2px 7px;
+      margin-bottom: 8px;
+    }
+    .pillar.green { border-left-color: var(--wm-green); }
+    .pillar.green .pill-label { color: var(--wm-green); background: #e6f7ee; }
+    .pillar.yellow { border-left-color: #d4920a; }
+    .pillar.yellow .pill-label { color: #92400e; background: #fef3c7; }
+
+    /* ── BUILT LIST ── */
+    .built-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+    .built-group {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px 22px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .built-group h3 {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--wm-blue);
+      margin-bottom: 12px;
+    }
+    .built-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 5px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 13.5px;
+    }
+    .built-item:last-child { border-bottom: none; }
+    .check { color: var(--wm-green); font-size: 14px; flex-shrink: 0; margin-top: 2px; }
+
+    /* ── IMPACT CARDS ── */
+    .impact-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    .impact-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 24px;
+      text-align: center;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .impact-card .big {
+      font-size: 36px;
+      font-weight: 800;
+      color: var(--wm-blue);
+      line-height: 1;
+      margin-bottom: 6px;
+    }
+    .impact-card .big.green { color: var(--wm-green); }
+    .impact-card .big.yellow { color: #d4920a; }
+    .impact-card .label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--wm-dark);
+      margin-bottom: 6px;
+    }
+    .impact-card .desc {
+      font-size: 12.5px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    /* ── NEXT STEPS ── */
+    .next-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+    .next-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 20px 22px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .next-card h3 {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--wm-dark);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .next-card h3 .icon { font-size: 16px; }
+    .next-card ul { list-style: none; }
+    .next-card ul li {
+      font-size: 13.5px;
+      color: var(--muted);
+      padding: 4px 0;
+      padding-left: 14px;
+      position: relative;
+    }
+    .next-card ul li::before {
+      content: '→';
+      position: absolute; left: 0;
+      color: var(--wm-blue);
+      font-size: 11px;
+      top: 6px;
+    }
+
+    /* ── DIVIDER ── */
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 48px 0;
+    }
+
+    /* ── CALLOUT BANNER ── */
+    .callout-banner {
+      background: var(--accent-bg);
+      border: 1px solid #bfdffa;
+      border-radius: 10px;
+      padding: 18px 24px;
+      font-size: 14px;
+      color: var(--wm-dark);
+      margin-bottom: 24px;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .callout-banner .icon { font-size: 20px; flex-shrink: 0; }
+
+    /* ── FLOW DIAGRAM ── */
+    .flow {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      flex-wrap: wrap;
+      margin: 20px 0;
+      justify-content: center;
+    }
+    .flow-node {
+      background: var(--wm-dark);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 10px 18px;
+      border-radius: 8px;
+      text-align: center;
+      min-width: 110px;
+    }
+    .flow-node.blue  { background: var(--wm-blue); }
+    .flow-node.green { background: var(--wm-green); }
+    .flow-node.multi {
+      background: linear-gradient(135deg, #1565c0 0%, var(--wm-blue) 50%, #0095e8 100%);
+    }
+    .flow-arrow {
+      color: var(--muted);
+      font-size: 20px;
+      padding: 0 8px;
+    }
+    .flow-sub {
+      font-size: 11px;
+      color: #9cb3cc;
+      margin-top: 3px;
+      font-weight: 400;
+    }
+
+    /* ── ARCH SVG wrapper ── */
+    .arch-svg {
+      display: block;
+      margin: 0 auto;
+      max-width: 820px;
+    }
+
+    /* ── FOOTER ── */
+    footer {
+      background: var(--wm-dark);
+      color: #6b8399;
+      text-align: center;
+      padding: 20px;
+      font-size: 12px;
+    }
+
+    @media (max-width: 720px) {
+      .problem-grid, .pillars, .built-grid, .impact-grid, .next-grid { grid-template-columns: 1fr; }
+      header { padding: 28px 24px; }
+      .page { padding: 32px 16px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════ HEADER ═══════════════════ -->
+<header>
+  <div class="eyebrow">ATF Program · Walmart</div>
+  <h1>Managed ArgoCD Platform</h1>
+  <p>A scalable, fault-isolated orchestration layer for deploying and managing applications across multiple Kubernetes environments at Walmart scale.</p>
+  <div class="header-badges">
+    <span class="hbadge">Checkpoint 2</span>
+    <span class="hbadge green">Active Development</span>
+  </div>
+</header>
+
+<div class="page">
+
+  <!-- ═══════════════════ THE PROBLEM ═══════════════════ -->
+  <section>
+    <div class="section-header">
+      <div class="section-icon">⚠</div>
+      <div>
+        <h2>The Problem</h2>
+        <div class="sub">Why the current setup cannot scale further</div>
+      </div>
+    </div>
+
+    <div class="problem-grid">
+      <div class="problem-card">
+        <div class="problem-stat">14 <span>nodes</span></div>
+        <h3>At the Scaling Ceiling</h3>
+        <p>The existing ArgoCD deployment has been scaled to 14 nodes. Performance and reliability degrade further beyond this point — the architecture has reached its practical limit.</p>
+      </div>
+      <div class="problem-card">
+        <div class="problem-stat">1 <span>failure domain</span></div>
+        <h3>Single Point of Failure</h3>
+        <p>All applications, clusters, and consumers share a single ArgoCD instance. An issue in one area — a rogue workload, a misconfiguration, a surge — can impact everything else on the platform.</p>
+      </div>
+      <div class="problem-card">
+        <div class="problem-stat">8× <span>target scale</span></div>
+        <h3>Target: 2,000+ Clusters</h3>
+        <p>The platform needs to grow from ~250 clusters to 2,000+ and from ~3,100 applications to 200,000+. The current architecture cannot absorb this growth without a fundamental redesign.</p>
+      </div>
+    </div>
+
+    <div style="margin-top:16px;" class="callout-banner">
+      <span class="icon">💡</span>
+      <div>The root constraint is architectural, not operational. Adding more nodes to a single ArgoCD instance shares the same Redis, etcd, and failure domain — it does not eliminate the blast radius or unlock true horizontal scale.</div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ THE APPROACH ═══════════════════ -->
+  <section>
+    <div class="section-header">
+      <div class="section-icon">🏗</div>
+      <div>
+        <h2>Our Approach</h2>
+        <div class="sub">One unified API. Many independent control planes.</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px;">
+      <p style="font-size:15px; color:var(--wm-dark); font-weight:500; margin-bottom:12px;">
+        Instead of scaling one giant ArgoCD, we introduce a <strong>Managed ArgoCD</strong> orchestration layer that routes work across multiple independent ArgoCD control planes — each with its own failure domain, its own operational scope, and its own scaling ceiling.
+      </p>
+      <p style="font-size:13.5px; color:var(--muted);">
+        Users interact with a single API. They never know — or need to know — which control plane their application lives on. The platform manages routing, partitioning, failover, and reconciliation automatically.
+      </p>
+    </div>
+
+    <!-- ARCHITECTURE DIAGRAM -->
+    <div class="arch-box">
+      <svg class="arch-svg" viewBox="0 0 820 360" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
+
+        <!-- User -->
+        <rect x="330" y="16" width="160" height="48" rx="8" fill="#041E42"/>
+        <text x="410" y="36" text-anchor="middle" fill="#fff" font-size="13" font-weight="600">User / Consumer</text>
+        <text x="410" y="54" text-anchor="middle" fill="#9cb3cc" font-size="10.5">REST API calls</text>
+
+        <!-- Arrow down -->
+        <line x1="410" y1="64" x2="410" y2="92" stroke="#bfc9d4" stroke-width="1.5" marker-end="url(#arr)"/>
+
+        <!-- Routing Service -->
+        <rect x="270" y="92" width="280" height="52" rx="8" fill="#0071CE"/>
+        <text x="410" y="113" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Routing Service</text>
+        <text x="410" y="131" text-anchor="middle" fill="#cce5f8" font-size="11">PostgreSQL · Single source of truth for user state</text>
+
+        <!-- Arrow down -->
+        <line x1="410" y1="144" x2="410" y2="172" stroke="#bfc9d4" stroke-width="1.5" marker-end="url(#arr)"/>
+
+        <!-- Managed ArgoCD -->
+        <rect x="270" y="172" width="280" height="52" rx="8" fill="#041E42" stroke="#0071CE" stroke-width="1.5"/>
+        <text x="410" y="193" text-anchor="middle" fill="#fff" font-size="13" font-weight="700">Managed ArgoCD</text>
+        <text x="410" y="211" text-anchor="middle" fill="#9cb3cc" font-size="11">Orchestrates all control planes via GitOps</text>
+
+        <!-- Fan-out arrows -->
+        <line x1="320" y1="224" x2="160" y2="264" stroke="#bfc9d4" stroke-width="1.5" marker-end="url(#arr)"/>
+        <line x1="410" y1="224" x2="410" y2="264" stroke="#bfc9d4" stroke-width="1.5" marker-end="url(#arr)"/>
+        <line x1="500" y1="224" x2="660" y2="264" stroke="#bfc9d4" stroke-width="1.5" marker-end="url(#arr)"/>
+
+        <!-- CP boxes -->
+        <rect x="70"  y="264" width="180" height="48" rx="8" fill="#1f3a5c"/>
+        <text x="160" y="284" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Control Plane 1</text>
+        <text x="160" y="300" text-anchor="middle" fill="#7aa8cc" font-size="10">Independent ArgoCD</text>
+
+        <rect x="320" y="264" width="180" height="48" rx="8" fill="#1f3a5c"/>
+        <text x="410" y="284" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Control Plane 2</text>
+        <text x="410" y="300" text-anchor="middle" fill="#7aa8cc" font-size="10">Independent ArgoCD</text>
+
+        <rect x="570" y="264" width="180" height="48" rx="8" fill="#1f3a5c"/>
+        <text x="660" y="284" text-anchor="middle" fill="#fff" font-size="12" font-weight="600">Control Plane N</text>
+        <text x="660" y="300" text-anchor="middle" fill="#7aa8cc" font-size="10">Independent ArgoCD</text>
+
+        <!-- Down to clusters -->
+        <line x1="160" y1="312" x2="160" y2="334" stroke="#bfc9d4" stroke-width="1.5" marker-end="url(#arr)"/>
+        <line x1="410" y1="312" x2="410" y2="334" stroke="#bfc9d4" stroke-width="1.5" marker-end="url(#arr)"/>
+        <line x1="660" y1="312" x2="660" y2="334" stroke="#bfc9d4" stroke-width="1.5" marker-end="url(#arr)"/>
+
+        <!-- User clusters row -->
+        <text x="160" y="350" text-anchor="middle" fill="#5a6a7e" font-size="11">User Clusters</text>
+        <text x="410" y="350" text-anchor="middle" fill="#5a6a7e" font-size="11">User Clusters</text>
+        <text x="660" y="350" text-anchor="middle" fill="#5a6a7e" font-size="11">User Clusters</text>
+
+        <!-- Arrow marker -->
+        <defs>
+          <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#bfc9d4"/>
+          </marker>
+        </defs>
+      </svg>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ HOW IT SOLVES EACH PROBLEM ═══════════════════ -->
+  <section>
+    <div class="section-header">
+      <div class="section-icon">✓</div>
+      <div>
+        <h2>How It Solves Each Problem</h2>
+        <div class="sub">Five design decisions, five problems addressed</div>
+      </div>
+    </div>
+
+    <div class="pillars">
+
+      <div class="pillar">
+        <div class="pill-label">Scale</div>
+        <h3>Horizontal Control Plane Distribution</h3>
+        <p>Scale is no longer a function of one ArgoCD instance's capacity. New control planes are added as needed — each independently sized, independently operated. The platform routes work across them automatically with no change to user-facing APIs.</p>
+      </div>
+
+      <div class="pillar green">
+        <div class="pill-label">Blast Radius</div>
+        <h3>Isolated Failure Domains</h3>
+        <p>A degraded or overloaded control plane affects only the clusters assigned to it. Other control planes and their workloads continue running. Failures are contained by design, not by luck.</p>
+      </div>
+
+      <div class="pillar">
+        <div class="pill-label">Infra Reliability</div>
+        <h3>Pure GitOps — Control Planes as Code</h3>
+        <p>Control planes are not manually installed or configured. Managed ArgoCD provisions them automatically when a cluster is registered with the platform label. Every control plane is reproducible from Git in minutes.</p>
+      </div>
+
+      <div class="pillar green">
+        <div class="pill-label">Resilience</div>
+        <h3>Fast, Safe Failover</h3>
+        <p>Moving all clusters off a failed control plane requires a single database update — no manual reconfiguration, no Helm overrides, no downtime window. The platform detects the change and reconciles automatically. Full and partial failover are both supported, with stepping and progress tracking.</p>
+      </div>
+
+      <div class="pillar yellow">
+        <div class="pill-label">Operational Cost</div>
+        <h3>Stable Partitioning — No Resource Churn</h3>
+        <p>Applications are assigned to stable partitions at creation time. Adding or removing a resource never triggers a global rebalance — unrelated workloads are not touched. Reconciliation work stays scoped to what actually changed.</p>
+      </div>
+
+      <div class="pillar yellow">
+        <div class="pill-label">Propagation Speed</div>
+        <h3>Event-Driven State Propagation</h3>
+        <p>When a user registers an application or moves a cluster, the platform immediately triggers reconciliation of only the affected partition — not waiting for the next polling cycle. Polling remains as a safety net only.</p>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ═══════════════════ HOW A USER RESOURCE FLOWS ═══════════════════ -->
+  <section>
+    <div class="section-header">
+      <div class="section-icon">⟶</div>
+      <div>
+        <h2>How a Resource Flows Through the Platform</h2>
+        <div class="sub">From API call to running workload</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="flow">
+        <div class="flow-node blue">
+          User API Call
+          <div class="flow-sub">Register application</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node blue">
+          Routing Service
+          <div class="flow-sub">Auth · Persist to DB</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node">
+          Partition Assigned
+          <div class="flow-sub">Stable FK in DB</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node blue">
+          Managed ArgoCD
+          <div class="flow-sub">Reconciles partition</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node">
+          Control Plane
+          <div class="flow-sub">Deploys workload</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-node green">
+          User Cluster
+          <div class="flow-sub">App running</div>
+        </div>
+      </div>
+      <p style="text-align:center; font-size:13px; color:var(--muted); margin-top:16px;">
+        The user interacts only with the Routing Service. Partitioning, routing to control planes, and reconciliation are fully platform-managed.
+      </p>
+    </div>
+  </section>
+
+  <hr class="divider" />
+
+  <!-- ═══════════════════ WHAT WE'VE BUILT ═══════════════════ -->
+  <section>
+    <div class="section-header">
+      <div class="section-icon">🔧</div>
+      <div>
+        <h2>What We've Built</h2>
+        <div class="sub">Capabilities delivered in this phase</div>
+      </div>
+    </div>
+
+    <div class="built-grid">
+
+      <div class="built-group">
+        <h3>Platform Backbone</h3>
+        <div class="built-item"><span class="check">✓</span> Full REST API for managing projects, clusters, and applications</div>
+        <div class="built-item"><span class="check">✓</span> PostgreSQL data model — partitions, CP assignment, resource lifecycle</div>
+        <div class="built-item"><span class="check">✓</span> Plugin Generator integration — dynamic routing without static configuration</div>
+        <div class="built-item"><span class="check">✓</span> Application name uniqueness enforced globally with stable identifiers</div>
+        <div class="built-item"><span class="check">✓</span> Cluster-project authorization enforced at the service layer</div>
+      </div>
+
+      <div class="built-group">
+        <h3>GitOps Infra Layer</h3>
+        <div class="built-item"><span class="check">✓</span> Self-bootstrapping platform — Managed ArgoCD manages itself via Git</div>
+        <div class="built-item"><span class="check">✓</span> Automated control plane provisioning from a cluster label — no manual Helm installs</div>
+        <div class="built-item"><span class="check">✓</span> Per-control-plane configuration overrides, version-controlled in Git</div>
+        <div class="built-item"><span class="check">✓</span> Separate poll cadences per resource type — tunable without code changes</div>
+        <div class="built-item"><span class="check">✓</span> AppProject destinations auto-generated from cluster assignments — no manual Git edits</div>
+      </div>
+
+      <div class="built-group">
+        <h3>Performance &amp; Consistency</h3>
+        <div class="built-item"><span class="check">✓</span> Redis partition cache — eliminates redundant DB reads at steady state</div>
+        <div class="built-item"><span class="check">✓</span> Cache explicitly invalidated on every state-mutating write</div>
+        <div class="built-item"><span class="check">✓</span> Immediate ArgoCD refresh triggered after cache invalidation</div>
+        <div class="built-item"><span class="check">✓</span> Stable partition assignment — deletions never cause rebalancing</div>
+      </div>
+
+      <div class="built-group">
+        <h3>Observability &amp; Safety</h3>
+        <div class="built-item"><span class="check">✓</span> Live ArgoCD state reflected in platform DB — sync, health, degraded, error</div>
+        <div class="built-item"><span class="check">✓</span> Notification pipeline from ArgoCD to platform service — no polling required</div>
+        <div class="built-item"><span class="check">✓</span> Safe application deletion — two modes: retain K8s resources or cascade-delete</div>
+        <div class="built-item"><span class="check">✓</span> Controlled failover API — full or partial, stepped batches, dry run, async progress</div>
+        <div class="built-item"><span class="check">✓</span> Resource blacklisting on AppProjects — prevents privilege escalation</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ═══════════════════ IMPACT ═══════════════════ -->
+  <section>
+    <div class="section-header">
+      <div class="section-icon">📈</div>
+      <div>
+        <h2>Platform Impact</h2>
+        <div class="sub">What this unlocks</div>
+      </div>
+    </div>
+
+    <div class="impact-grid">
+      <div class="impact-card">
+        <div class="big">8×</div>
+        <div class="label">Scale headroom</div>
+        <div class="desc">From ~250 clusters today to 2,000+ clusters — without changing the user-facing API or operational model.</div>
+      </div>
+      <div class="impact-card">
+        <div class="big green">Isolated</div>
+        <div class="label">Failures</div>
+        <div class="desc">A control plane failure affects only its assigned clusters. The rest of the platform continues uninterrupted.</div>
+      </div>
+      <div class="impact-card">
+        <div class="big yellow">Minutes</div>
+        <div class="label">Failover time</div>
+        <div class="desc">Moving all clusters off a failed control plane is a single database operation, not a manual incident response procedure.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════════════ WHAT'S NEXT ═══════════════════ -->
+  <section>
+    <div class="section-header">
+      <div class="section-icon">→</div>
+      <div>
+        <h2>What's Next</h2>
+        <div class="sub">Planned enhancements for production readiness</div>
+      </div>
+    </div>
+
+    <div class="next-grid">
+
+      <div class="next-card">
+        <h3><span class="icon">🔐</span> Identity &amp; Access Control</h3>
+        <ul>
+          <li>SSO integration — LDAP and Azure AD support</li>
+          <li>Active Directory group-based authorization for projects and clusters</li>
+          <li>Cluster ownership model — creator tracking and delegated access</li>
+        </ul>
+      </div>
+
+      <div class="next-card">
+        <h3><span class="icon">🖥</span> Management UI</h3>
+        <ul>
+          <li>Authenticated UI with SSO</li>
+          <li>Live application health driven by ArgoCD state</li>
+          <li>Cluster-to-project assignment workflow</li>
+          <li>Audit log and resource change history</li>
+        </ul>
+      </div>
+
+      <div class="next-card">
+        <h3><span class="icon">📊</span> Observability</h3>
+        <ul>
+          <li>Platform metrics — partition fill, CP load, reconciliation latency</li>
+          <li>Per-resource change history with before/after snapshots</li>
+          <li>User-facing status timeline on each resource</li>
+        </ul>
+      </div>
+
+      <div class="next-card">
+        <h3><span class="icon">🔒</span> Security Hardening</h3>
+        <ul>
+          <li>External secrets management — no credentials at rest in the database</li>
+          <li>Typed cluster authentication with validation at registration time</li>
+          <li>User-configurable AppProject policies within platform-enforced guardrails</li>
+          <li>User notification subscription via application registration (webhook, Slack, etc.)</li>
+        </ul>
+      </div>
+
+    </div>
+  </section>
+
+</div>
+
+<footer>
+  Managed ArgoCD Platform · ATF Program · Walmart &nbsp;|&nbsp; Internal Use Only
+</footer>
+
+</body>
+</html>

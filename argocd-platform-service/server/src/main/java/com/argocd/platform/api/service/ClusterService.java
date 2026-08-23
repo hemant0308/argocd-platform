@@ -77,9 +77,9 @@ public class ClusterService {
         // Always resolve control plane on create — reassignControlPlane is update-only
         UUID controlPlaneId = resolveControlPlaneId(request);
 
-        // CP-scoped partition: partition number is unique per control plane (Option B)
-        UUID partitionId = partitionService.resolveClusterPartitionForCp(
-                controlPlaneId, partitionProperties.getClusterTargetSize());
+        // Global partition: partition number is globally unique across all control planes (Option A)
+        UUID partitionId = partitionService.resolveClusterPartition(
+                partitionProperties.getClusterTargetSize());
 
         ClustersEntity entity = new ClustersEntity()
                 .setName(request.getName())
@@ -115,6 +115,11 @@ public class ClusterService {
                 .setAuth(jsonbUtils.toJsonb(request.getAuth()));
 
         ClustersEntity updated = clusterRepository.update(id, existing);
+        // Bump generation so Level 1 partition-list response carries the new value,
+        // triggering event-driven Level 3 ApplicationSet reconciliation within ~10 s
+        // (the Level 1 requeueAfterSeconds). Without this bump a cluster update would
+        // wait the full 600 s Level 3 safety-net poll before propagating to ArgoCD.
+        partitionService.bumpClusterPartitionGeneration(existing.getClusterPartitionId());
         eventPublisher.publishEvent(
                 new PartitionChangedEvent(this, existing.getClusterPartitionId(), PartitionType.CLUSTER));
         return toResponse(updated, fetchControlPlaneName(controlPlaneId));
@@ -146,6 +151,8 @@ public class ClusterService {
                 .orElseThrow(() -> new ResourceNotFoundException("Cluster not found: " + id));
         UUID partitionId = existing.getClusterPartitionId();
         clusterRepository.deleteById(id);
+        // Bump generation so removal is reflected in the Level 1 poll within ~10 s.
+        partitionService.bumpClusterPartitionGeneration(partitionId);
         eventPublisher.publishEvent(new PartitionChangedEvent(this, partitionId, PartitionType.CLUSTER));
     }
 

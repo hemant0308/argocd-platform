@@ -36,6 +36,8 @@ spec:
           parameters:
             resource: "project-groups"
             partitionNumber: "{{ .Values.partitionNumber }}"
+            # generation in spec triggers spec-level change on bump → immediate reconcile.
+            generation: "{{ .Values.generation }}"
 
   template:
     metadata:

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-seed_platform.py — ArgoCD Platform local environment seeder.
+seed_platform.py — ArgoCD Platform local environment tool.
 
-Creates Kind clusters for control planes and destinations, registers them with
-the platform API, creates projects with random cluster assignments, and creates
-applications pointing to charts/sample-app.
+Commands:
+  seed      Create Kind clusters, register them, create projects + applications.
+  teardown  Delete all Kind clusters (with confirmation) and clean up the API.
+  startup   Wait for ArgoCD servers to be ready on all CP clusters, then
+            port-forward all ArgoCD UIs and print access URLs.
 
 Requirements:
     - kind, kubectl available on PATH
@@ -13,13 +15,12 @@ Requirements:
       Falls back to PyYAML (pip install pyyaml) which works but strips file comments.
 
 Usage:
-    python3 scripts/seed_platform.py \\
-        --control-planes 3 \\
-        --destinations 5 \\
-        --projects 4 \\
-        --applications 10 \\
-        [--repo https://github.com/org/argocd-platform.git] \\
-        [--api http://localhost:8080]
+    python3 scripts/seed_platform.py seed \\
+        --control-planes 3 --destinations 5 --projects 4 --applications 10
+
+    python3 scripts/seed_platform.py teardown
+
+    python3 scripts/seed_platform.py startup
 """
 
 import argparse
@@ -27,6 +28,7 @@ import base64
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import time
@@ -46,6 +48,10 @@ CHART_PATH = "charts/sample-app"
 SERVICE_ACCOUNT = "argocd-manager"
 SA_NAMESPACE = "kube-system"
 TOKEN_SECRET = "argocd-manager-token"
+
+MANAGED_ARGOCD_SVC = "argocd-server"                     # service name in the managed cluster
+MANAGED_PORT = 8082                                        # local port for managed ArgoCD UI
+CP_BASE_PORT = 8083                                        # first port assigned to cp-1, cp-2, …
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 VALUES_FILE = SCRIPT_DIR.parent / "argocd" / "managed" / "values.yaml"
@@ -234,6 +240,16 @@ def api_post(path: str, data: dict) -> dict:
         raise RuntimeError(f"POST {path} → HTTP {exc.code}: {detail}") from exc
 
 
+def api_delete(path: str) -> None:
+    """Send DELETE to the platform API; silently ignores 404."""
+    req = urllib.request.Request(f"{_api_base}{path}", method="DELETE")
+    try:
+        urllib.request.urlopen(req)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            warn(f"DELETE {path} → HTTP {exc.code}")
+
+
 def find_by_name(items: list, name: str):
     return next((i for i in items if i.get("name") == name), None)
 
@@ -355,6 +371,61 @@ def update_values_yaml(cp_name: str, server: str, bearer_token: str) -> None:
     warn(f"  bearerToken: {bearer_token[:40]}…")
 
 
+def remove_from_values_yaml(cp_names: list) -> None:
+    """
+    Remove named entries from the clusters list in values.yaml.
+    Uses ruamel.yaml (comment-preserving) if available, else PyYAML.
+    """
+    if not cp_names or not VALUES_FILE.exists():
+        return
+
+    name_set = set(cp_names)
+
+    # ── ruamel.yaml ──────────────────────────────────────────────────────
+    try:
+        from ruamel.yaml import YAML
+
+        ryaml = YAML()
+        ryaml.preserve_quotes = True
+
+        with open(VALUES_FILE) as fh:
+            values = ryaml.load(fh)
+
+        if values and "clusters" in values:
+            before = len(values["clusters"])
+            values["clusters"] = [c for c in values["clusters"] if c.get("name") not in name_set]
+            removed = before - len(values["clusters"])
+            if removed:
+                with open(VALUES_FILE, "w") as fh:
+                    ryaml.dump(values, fh)
+                info(f"Removed {removed} entry/entries from values.yaml (ruamel.yaml).")
+        return
+
+    except ImportError:
+        pass
+
+    # ── PyYAML fallback ───────────────────────────────────────────────────
+    try:
+        import yaml
+
+        with open(VALUES_FILE) as fh:
+            values = yaml.safe_load(fh) or {}
+
+        if "clusters" in values:
+            before = len(values["clusters"])
+            values["clusters"] = [c for c in values["clusters"] if c.get("name") not in name_set]
+            if len(values["clusters"]) < before:
+                with open(VALUES_FILE, "w") as fh:
+                    yaml.dump(values, fh, default_flow_style=False, allow_unicode=True, sort_keys=False)
+                info("Removed CP entries from values.yaml (PyYAML).")
+        return
+
+    except ImportError:
+        pass
+
+    warn("Cannot clean up values.yaml — neither ruamel.yaml nor PyYAML installed.")
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Phase 1 — Control Planes
 # ──────────────────────────────────────────────────────────────────────────────
@@ -363,7 +434,7 @@ def phase_control_planes(count: int) -> list:
     """
     For each cp-1 … cp-N:
       1. Create/reuse Kind cluster.
-      2. Extract bearerToken + CA.
+      2. Extract bearerToken.
       3. Upsert entry in argocd/managed/values.yaml (direct secretType).
       4. Register control plane via POST /api/v1/control-planes (idempotent).
     """
@@ -415,7 +486,7 @@ def phase_destinations(count: int, cp_records: list) -> list:
     """
     For each dest-1 … dest-N:
       1. Create/reuse Kind cluster.
-      2. Extract bearerToken + CA.
+      2. Extract bearerToken.
       3. Register cluster via POST /api/v1/clusters with random CP assignment
          (EXPLICIT algorithm) and auth credentials (idempotent by name).
     """
@@ -501,6 +572,7 @@ def phase_projects(count: int, dest_records: list) -> list:
         else:
             k = random.randint(1, min(3, len(dest_records)))
             selected = random.sample(dest_records, k)
+
         cluster_names = [c["name"] for c in selected]
         info(f"Assigning clusters ({len(selected)}): {cluster_names}")
 
@@ -596,58 +668,342 @@ def phase_applications(count: int, project_records: list, repo_url: str) -> list
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Teardown
+# ──────────────────────────────────────────────────────────────────────────────
+
+def phase_teardown(skip_api_cleanup: bool = False, clean_values: bool = False) -> None:
+    """
+    1. List all Kind clusters.
+    2. Show them and ask for confirmation.
+    3. Delete each Kind cluster.
+    4. Remove cp-* entries from argocd/managed/values.yaml.
+    5. Delete all resources from the platform API (apps → projects → clusters → CPs).
+    """
+    log("Teardown — Deleting Kind clusters")
+
+    raw = run_capture(["kind", "get", "clusters"], check=False)
+    all_clusters = [c.strip() for c in raw.splitlines() if c.strip()]
+
+    if not all_clusters:
+        info("No Kind clusters found — nothing to delete.")
+        return
+
+    print("\n  The following Kind clusters will be deleted:\n")
+    for c in sorted(all_clusters):
+        print(f"    •  {c}")
+    print()
+
+    confirm = input("  Type 'yes' to confirm deletion: ").strip().lower()
+    if confirm != "yes":
+        print("\n  Aborted — no clusters were deleted.")
+        return
+
+    print()
+    for cluster in sorted(all_clusters):
+        info(f"Deleting Kind cluster '{cluster}' …")
+        run_show(["kind", "delete", "cluster", "--name", cluster], check=False)
+
+    # Remove CP credentials from values.yaml only when explicitly requested
+    cp_names = [c for c in all_clusters if re.match(r"^cp-\d+$", c)]
+    if cp_names and clean_values:
+        info(f"Removing entries from values.yaml: {cp_names}")
+        remove_from_values_yaml(cp_names)
+    elif cp_names:
+        info(f"Kept values.yaml entries for: {cp_names}  (pass --clean-values to remove)")
+
+    # Clean up platform API
+    if not skip_api_cleanup:
+        log("Teardown — Cleaning up platform API")
+        try:
+            # Order matters: apps → projects → clusters → control-planes
+            for app in api_get("/api/v1/applications"):
+                api_delete(f"/api/v1/applications/{app['id']}")
+                info(f"Deleted application  '{app['name']}'")
+
+            for proj in api_get("/api/v1/projects"):
+                api_delete(f"/api/v1/projects/{proj['id']}")
+                info(f"Deleted project      '{proj['name']}'")
+
+            for cl in api_get("/api/v1/clusters"):
+                api_delete(f"/api/v1/clusters/{cl['id']}")
+                info(f"Deleted cluster      '{cl['name']}'")
+
+            for cp in api_get("/api/v1/control-planes"):
+                api_delete(f"/api/v1/control-planes/{cp['id']}")
+                info(f"Deleted control plane '{cp['name']}'")
+
+        except Exception as exc:
+            warn(f"API cleanup failed: {exc}")
+            warn("You may need to clean up API resources manually.")
+
+    log("Teardown complete")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Startup — port-forward ArgoCD UIs
+# ──────────────────────────────────────────────────────────────────────────────
+
+def wait_for_argocd_server(context: str, cp_name: str, timeout: int = 600) -> bool:
+    """
+    Poll until the argocd-server pod is Ready in the given context.
+    Prints a progress line every 15 s.
+    Returns True on success, False on timeout.
+    """
+    deadline = time.time() + timeout
+    last_report = 0.0
+
+    while time.time() < deadline:
+        result = subprocess.run(
+            [
+                "kubectl", "--context", context,
+                "wait", "pod",
+                "--for=condition=Ready",
+                "-l", "app.kubernetes.io/name=argocd-server",
+                "-n", "argocd",
+                "--timeout=5s",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            info(f"[{cp_name}] argocd-server is Ready ✓")
+            return True
+
+        now = time.time()
+        if now - last_report >= 15:
+            remaining = int(deadline - now)
+            print(
+                f"    ↺  [{cp_name}] waiting for argocd-server pod… ({remaining}s left)",
+                flush=True,
+            )
+            last_report = now
+
+        time.sleep(5)
+
+    return False
+
+
+def _start_port_forward(context: str, svc: str, local_port: int) -> subprocess.Popen:
+    cmd = [
+        "kubectl", "--context", context,
+        "port-forward", f"svc/{svc}",
+        "-n", "argocd",
+        f"{local_port}:443",
+    ]
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def phase_startup(managed_cluster: str = "managed") -> None:
+    """
+    1. Detect managed + all cp-* Kind clusters.
+    2. Wait for argocd-server pods to be Ready in every CP cluster
+       (the user commits + pushes separately to trigger ArgoCD sync).
+    3. Launch kubectl port-forward for each cluster.
+    4. Print the URL table and keep port-forwards alive (auto-restart on crash).
+
+    Port assignments:
+        managed  → {MANAGED_PORT}  (https://manager.localhost:{MANAGED_PORT})
+        cp-1     → {CP_BASE_PORT}  (https://cp1.localhost:{CP_BASE_PORT})
+        cp-2     → {CP_BASE_PORT+1}  ...
+    """
+    log("Startup — Port-forwarding ArgoCD servers")
+
+    raw = run_capture(["kind", "get", "clusters"], check=False)
+    all_clusters = [c.strip() for c in raw.splitlines() if c.strip()]
+
+    # Sort CP clusters numerically
+    cp_clusters = sorted(
+        [c for c in all_clusters if re.match(r"^cp-\d+$", c)],
+        key=lambda c: int(c.split("-")[1]),
+    )
+    has_managed = managed_cluster in all_clusters
+
+    if not has_managed and not cp_clusters:
+        warn(f"No '{managed_cluster}' or cp-* clusters found in Kind.")
+        return
+
+    # ── Wait for ArgoCD on CP clusters ──────────────────────────────────
+    if cp_clusters:
+        print(f"\n  Found {len(cp_clusters)} control plane cluster(s): {cp_clusters}")
+        print("\n  Waiting for the ArgoCD server pod to become Ready on each CP cluster.")
+        print("  In another terminal: git add / git commit / git push so managed ArgoCD")
+        print("  syncs and installs the CP ArgoCD Helm chart.\n")
+
+        ready_cps = []
+        for cp in cp_clusters:
+            context = f"kind-{cp}"
+            ok = wait_for_argocd_server(context, cp, timeout=600)
+            if ok:
+                ready_cps.append(cp)
+            else:
+                warn(f"ArgoCD not ready in '{cp}' after 10 min — it will be skipped.")
+    else:
+        ready_cps = []
+
+    # ── Build port-forward table ─────────────────────────────────────────
+    # (cluster_name, local_port, svc_name)
+    forwards_spec: list = []
+
+    if has_managed:
+        forwards_spec.append((managed_cluster, MANAGED_PORT, MANAGED_ARGOCD_SVC))
+
+    for i, cp in enumerate(ready_cps):
+        svc = f"control-plane-{cp}-argocd-server"
+        forwards_spec.append((cp, CP_BASE_PORT + i, svc))
+
+    if not forwards_spec:
+        warn("Nothing to port-forward.")
+        return
+
+    # ── Launch port-forwards ─────────────────────────────────────────────
+    forwards = []   # (cluster_name, local_port, svc_name, Popen)
+    for cluster_name, local_port, svc in forwards_spec:
+        context = f"kind-{cluster_name}"
+        proc = _start_port_forward(context, svc, local_port)
+        forwards.append((cluster_name, local_port, svc, proc))
+        info(f"port-forward :{local_port} → {cluster_name}  svc/{svc}  (pid={proc.pid})")
+
+    # Give the OS a moment to bind the ports
+    time.sleep(2)
+
+    # ── Print URL table ──────────────────────────────────────────────────
+    log("ArgoCD UIs — port-forward active")
+    for cluster_name, local_port, svc, _ in forwards:
+        if cluster_name == managed_cluster:
+            label = "Managed"
+            host = f"manager.localhost:{local_port}"
+        else:
+            # cp-1 → cp1, cp-2 → cp2
+            short = cluster_name.replace("-", "")
+            label = cluster_name
+            host = f"{short}.localhost:{local_port}"
+        print(f"  {label:<10}  -->  https://{host}")
+
+    print("\n  Port-forwards are running. Press Ctrl+C to stop.\n")
+
+    # ── Keep alive with auto-restart ─────────────────────────────────────
+    try:
+        while True:
+            time.sleep(5)
+            for i, (cluster_name, local_port, svc, proc) in enumerate(forwards):
+                if proc.poll() is not None:
+                    context = f"kind-{cluster_name}"
+                    warn(
+                        f"Port-forward for '{cluster_name}' (:{local_port}) exited "
+                        f"(rc={proc.returncode}) — restarting…"
+                    )
+                    new_proc = _start_port_forward(context, svc, local_port)
+                    forwards[i] = (cluster_name, local_port, svc, new_proc)
+    except KeyboardInterrupt:
+        print("\n\n  Stopping port-forwards…")
+        for _, _, _, proc in forwards:
+            proc.terminate()
+        print("  Done.\n")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _check_tools(*tools: str) -> None:
+    for tool in tools:
+        result = subprocess.run(["which", tool], capture_output=True)
+        if result.returncode != 0:
+            print(f"ERROR: '{tool}' not found on PATH.", file=sys.stderr)
+            sys.exit(1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Seed the ArgoCD platform with Kind clusters, projects, and applications.",
+        description="ArgoCD Platform local environment tool.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # ── seed ─────────────────────────────────────────────────────────────────
+    seed_p = subparsers.add_parser(
+        "seed",
+        help="Seed platform with Kind clusters, projects, and applications.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python3 scripts/seed_platform.py \\
+  python3 scripts/seed_platform.py seed \\
       --control-planes 2 --destinations 4 --projects 3 --applications 10
 
-  python3 scripts/seed_platform.py \\
+  python3 scripts/seed_platform.py seed \\
       --control-planes 1 --destinations 2 --projects 2 --applications 5 \\
       --repo https://github.com/myorg/argocd-platform.git
         """,
     )
-    parser.add_argument(
+    seed_p.add_argument(
         "--control-planes", type=int, required=True, metavar="N",
         help="Number of control plane clusters to create (cp-1 … cp-N)",
     )
-    parser.add_argument(
+    seed_p.add_argument(
         "--destinations", type=int, required=True, metavar="N",
         help="Number of destination clusters to create (dest-1 … dest-N)",
     )
-    parser.add_argument(
+    seed_p.add_argument(
         "--projects", type=int, required=True, metavar="N",
         help="Number of projects to create (project1 … projectN)",
     )
-    parser.add_argument(
+    seed_p.add_argument(
         "--applications", type=int, required=True, metavar="N",
         help="Number of applications to create (app-0001 … app-NNNN)",
     )
-    parser.add_argument(
+    seed_p.add_argument(
         "--repo", metavar="URL", default=DEFAULT_REPO_URL,
         help=f"Git repo URL for application sources (default: {DEFAULT_REPO_URL})",
     )
-    parser.add_argument(
+    seed_p.add_argument(
         "--api", metavar="URL", default=DEFAULT_API_URL,
         help=f"Platform API base URL (default: {DEFAULT_API_URL})",
     )
+
+    # ── teardown ──────────────────────────────────────────────────────────────
+    td_p = subparsers.add_parser(
+        "teardown",
+        help="Delete all Kind clusters and clean up the platform API.",
+    )
+    td_p.add_argument(
+        "--api", metavar="URL", default=DEFAULT_API_URL,
+        help=f"Platform API base URL (default: {DEFAULT_API_URL})",
+    )
+    td_p.add_argument(
+        "--skip-api-cleanup", action="store_true",
+        help="Skip deleting resources from the platform API.",
+    )
+    td_p.add_argument(
+        "--clean-values", action="store_true",
+        help="Also remove cp-* entries from argocd/managed/values.yaml (off by default).",
+    )
+
+    # ── startup ───────────────────────────────────────────────────────────────
+    su_p = subparsers.add_parser(
+        "startup",
+        help=(
+            "Wait for ArgoCD servers to be ready on all CP clusters, "
+            "then port-forward all ArgoCD UIs."
+        ),
+    )
+    su_p.add_argument(
+        "--managed-cluster", metavar="NAME", default="managed",
+        help="Kind cluster name for the managed ArgoCD (default: managed)",
+    )
+
     args = parser.parse_args()
 
-    # Apply global API base URL
+    # ── Dispatch ──────────────────────────────────────────────────────────────
     global _api_base
-    _api_base = args.api
 
-    print("""
+    if args.command == "seed":
+        _api_base = args.api
+
+        print("""
 ╔══════════════════════════════════════════════════════════╗
 ║          ArgoCD Platform — Local Environment Seeder      ║
 ╚══════════════════════════════════════════════════════════╝""")
-    print(f"""
+        print(f"""
   Control planes  : {args.control_planes}  (cp-1 … cp-{args.control_planes})
   Destinations    : {args.destinations}  (dest-1 … dest-{args.destinations})
   Projects        : {args.projects}  (project1 … project{args.projects})
@@ -657,34 +1013,28 @@ Examples:
   Values file     : {VALUES_FILE}
 """)
 
-    # Validate prerequisites
-    for tool in ("kind", "kubectl"):
-        result = subprocess.run(["which", tool], capture_output=True)
-        if result.returncode != 0:
-            print(f"ERROR: '{tool}' not found on PATH.", file=sys.stderr)
+        _check_tools("kind", "kubectl")
+
+        try:
+            api_get("/api/v1/control-planes")
+        except Exception as exc:
+            print(f"ERROR: Cannot reach platform API at {_api_base}: {exc}", file=sys.stderr)
             sys.exit(1)
 
-    # Validate API reachability
-    try:
-        api_get("/api/v1/control-planes")
-    except Exception as exc:
-        print(f"ERROR: Cannot reach platform API at {_api_base}: {exc}", file=sys.stderr)
-        sys.exit(1)
+        try:
+            cp_records = phase_control_planes(args.control_planes)
+            dest_records = phase_destinations(args.destinations, cp_records)
+            project_records = phase_projects(args.projects, dest_records)
+            app_records = phase_applications(args.applications, project_records, args.repo)
+        except KeyboardInterrupt:
+            print("\n\nInterrupted.", file=sys.stderr)
+            sys.exit(130)
+        except RuntimeError as exc:
+            print(f"\nERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
 
-    try:
-        cp_records = phase_control_planes(args.control_planes)
-        dest_records = phase_destinations(args.destinations, cp_records)
-        project_records = phase_projects(args.projects, dest_records)
-        app_records = phase_applications(args.applications, project_records, args.repo)
-    except KeyboardInterrupt:
-        print("\n\nInterrupted.", file=sys.stderr)
-        sys.exit(130)
-    except RuntimeError as exc:
-        print(f"\nERROR: {exc}", file=sys.stderr)
-        sys.exit(1)
-
-    log("Seeding complete")
-    print(f"""
+        log("Seeding complete")
+        print(f"""
   Control planes registered : {len(cp_records)}
   Destination clusters      : {len(dest_records)}
   Projects created          : {len(project_records)}
@@ -693,6 +1043,26 @@ Examples:
   Note: application names have a 5-char hex suffix appended by the
   platform API (e.g. app-0001 → app-0001-3f2a1). See output above.
 """)
+
+    elif args.command == "teardown":
+        _api_base = args.api
+
+        _check_tools("kind", "kubectl")
+
+        try:
+            phase_teardown(skip_api_cleanup=args.skip_api_cleanup, clean_values=args.clean_values)
+        except KeyboardInterrupt:
+            print("\n\nInterrupted.", file=sys.stderr)
+            sys.exit(130)
+
+    elif args.command == "startup":
+        _check_tools("kind", "kubectl")
+
+        try:
+            phase_startup(managed_cluster=args.managed_cluster)
+        except KeyboardInterrupt:
+            print("\n\nInterrupted.", file=sys.stderr)
+            sys.exit(130)
 
 
 if __name__ == "__main__":

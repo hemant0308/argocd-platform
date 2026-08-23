@@ -2,6 +2,7 @@ package com.argocd.platform.api.task;
 
 import com.argocd.platform.api.cache.event.PartitionChangedEvent;
 import com.argocd.platform.api.repository.ApplicationRepository;
+import com.argocd.platform.api.service.PartitionService;
 import com.argocd.platform.api.util.DeletionMode;
 import com.argocd.platform.api.util.PartitionType;
 import lombok.RequiredArgsConstructor;
@@ -54,16 +55,18 @@ import java.util.List;
 public class DeletionStateTransitionTask {
 
     private final ApplicationRepository applicationRepository;
+    private final PartitionService partitionService;
     private final ApplicationEventPublisher eventPublisher;
 
     /**
      * Fallback delay (seconds) before advancing a {@code HARD_DELETE} app to
      * {@code AWAITING_PRUNE} when the event-driven path fails (missed notification).
      *
-     * <p>Default: 300 s (5 min, 10× the 30 s poll interval). By this time the
-     * {@code resources-finalizer} is very likely synced even for a slow ArgoCD reconcile.
-     * Keep this value well above the normal event latency (typically &lt; 60 s)
-     * so the scheduler never races the event-driven path in healthy conditions.
+     * <p>Default: 300 s (5 min). Well above the normal event-driven path latency
+     * (≤ 10 s via Level 1 poll + Level 2 Helm re-render + Level 3 reconcile),
+     * giving substantial margin for webhook delivery retries and slow ArgoCD reconciles.
+     * Keep this value well above the normal event latency so the scheduler never
+     * races the event-driven path in healthy conditions.
      */
     @Value("${argocd.platform.deletion.hard-delete-fallback-seconds:300}")
     private long hardDeleteFallbackSeconds;
@@ -72,7 +75,8 @@ public class DeletionStateTransitionTask {
      * Fallback delay (seconds) before tombstoning a {@code SOFT_DELETE} app
      * whose {@code on-deleted} notification was not received.
      *
-     * <p>Default: 120 s (4× the default 30 s poll interval).
+     * <p>Default: 120 s — gives K8s sufficient time to deliver the {@code on-deleted}
+     * notification before the fallback tombstones the row.
      */
     @Value("${argocd.platform.deletion.soft-delete-timeout-seconds:120}")
     private long softDeleteTimeoutSeconds;
@@ -149,8 +153,12 @@ public class DeletionStateTransitionTask {
                     c.id(), DeletionMode.HARD_DELETE.name(), DeletionMode.AWAITING_PRUNE.name());
             if (rows > 0) {
                 log.warn("Deletion scheduler fallback: forced app '{}' ({}) HARD_DELETE → AWAITING_PRUNE " +
-                         "after {} s timeout; invalidating plugin cache for partition {}",
+                         "after {} s timeout; bumping partition generation and invalidating cache for partition {}",
                         c.name(), c.id(), hardDeleteFallbackSeconds, c.applicationPartitionId());
+                // Bump generation so Level 1 (10 s poll) detects the change and triggers an
+                // immediate Level 3 reconcile. Without this the 600 s safety-net poll would
+                // be the only path for ArgoCD to see the AWAITING_PRUNE state.
+                partitionService.bumpApplicationPartitionGeneration(c.applicationPartitionId());
                 eventPublisher.publishEvent(
                         new PartitionChangedEvent(this, c.applicationPartitionId(), PartitionType.APPLICATION));
             } else {

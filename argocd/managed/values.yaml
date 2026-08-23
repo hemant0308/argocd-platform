@@ -18,26 +18,34 @@ git:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ApplicationSet poll intervals (seconds)
-# Tune based on scale-test results. Lower = faster propagation, higher DB load.
 #
-# Level 1 (partition-discovery, live in argocd/managed):
-#   How often the managed ArgoCD asks "how many partitions exist now?"
-#   Responses are small and change rarely — 30s is a safe default.
+# Event-driven reconciliation model:
+#   Every resource mutation bumps the affected partition's generation counter.
+#   Level 1 polls at 10 s (tiny response: partition numbers + generations only).
+#   When Level 1 detects a changed generation it re-renders the Level 2 Application
+#   via Helm, which changes the Level 3 ApplicationSet spec
+#   (input.parameters.generation) → ArgoCD immediately reconciles Level 3 →
+#   Plugin Generator called → fresh data within ~10 s of the original mutation.
+#   Level 3's 600 s interval is a pure safety net for missed events.
 #
-# Level 2 (group-discovery, rendered by charts/*-partition):
-#   How often each partition AppSet asks "what resources are in my partition?"
-#   These responses carry actual cluster/project/application payloads and are
-#   the primary reconciliation signal. Tune based on acceptable propagation lag.
+# Level 1 (partition-discovery, argocd/managed):
+#   Polls /application-partitions, /cluster-partitions, /project-partitions.
+#   Response payload is tiny (partition numbers + generations). 10 s is safe
+#   even at 1 000 partitions.
+#
+# Level 3 (group-discovery, rendered by charts/*-partition):
+#   600 s safety-net only — normal reconciliation is event-driven via Level 1.
+#   Do NOT lower this without re-evaluating DB query load at peak partition count.
 # ─────────────────────────────────────────────────────────────────────────────
 requeueAfterSeconds:
-  # Level 1 — partition-discovery AppSets (argocd/managed)
-  clusterPartitions: 30
-  projectPartitions: 30
-  applicationPartitions: 30
-  # Level 2 — group-discovery AppSets (charts/*-partition)
-  clusterGroups: 30
-  projectGroups: 30
-  applicationGroups: 30
+  # Level 1 — partition-discovery AppSets (argocd/managed); small payload, poll fast
+  clusterPartitions: 10
+  projectPartitions: 10
+  applicationPartitions: 10
+  # Level 3 — group-discovery AppSets (charts/*-partition); safety-net only
+  clusterGroups: 600
+  projectGroups: 600
+  applicationGroups: 600
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Control-plane ApplicationSet
@@ -71,7 +79,7 @@ clusters:
     # Populate when secretType=direct
   direct:
     bearerToken: 
-      eyJhbGciOiJSUzI1NiIsImtpZCI6Ikctb0kwZVNQdWpmX1o3UHBqVUhSa3dUWU9fYWktN2x1SlJlbFYtZENjX0EifQ.eyJpc3MiOiJrdWJlcm5ldGVzL3NlcnZpY2VhY2NvdW50Iiwia3ViZXJuZXRlcy5pby9zZXJ2aWNlYWNjb3VudC9uYW1lc3BhY2UiOiJrdWJlLXN5c3RlbSIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VjcmV0Lm5hbWUiOiJhcmdvY2QtbWFuYWdlci10b2tlbiIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50Lm5hbWUiOiJhcmdvY2QtbWFuYWdlciIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50LnVpZCI6ImQwYzNjNWYxLTRkNzEtNDZlNC1iMTg1LWQ5MmMyMTkzZDMwMiIsInN1YiI6InN5c3RlbTpzZXJ2aWNlYWNjb3VudDprdWJlLXN5c3RlbTphcmdvY2QtbWFuYWdlciJ9.lAD-SJsZ-X3RsqN9LII3QjbcXn14ZO3jkVCuEWRHej-TtV9ADy05CZsra46ygJUduy3fTizapykIoSzpMyOSiS1rq0ATSkj90tIChp0IJFXi7nQ1TBkO0vGqgAEKGu3dY_djLmaQMrzcSgLLx-e42Zy6R97nBz1aD54EtQLQkyseJTxuTTeARrKL7NnLV8oV0ujX0VDcmFDXFD7ubhByuDL0VrelIJkB6k0UVyv3nJVpcKrkL_aj-jA1DmXdjbdTWC-C_JXY2UlO9Ryi4jgyPZ7arfCIW5xRuASaLKQh6l6_5bn38ZmcrW_6ed4s1_tNHVlrO_eL72R35HjZps3CkA
+      eyJhbGciOiJSUzI1NiIsImtpZCI6IkRTWDVjdzBndGx4d2FlbmhEOExXeGxUOVdldmh4MHYwRFlCa0lhdEVDaGsifQ.eyJpc3MiOiJrdWJlcm5ldGVzL3NlcnZpY2VhY2NvdW50Iiwia3ViZXJuZXRlcy5pby9zZXJ2aWNlYWNjb3VudC9uYW1lc3BhY2UiOiJrdWJlLXN5c3RlbSIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VjcmV0Lm5hbWUiOiJhcmdvY2QtbWFuYWdlci10b2tlbiIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50Lm5hbWUiOiJhcmdvY2QtbWFuYWdlciIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50LnVpZCI6IjdjNDA4Njk3LWMwYmEtNGE4Yy1hYTJjLWJmODNjNGI1OTIwZCIsInN1YiI6InN5c3RlbTpzZXJ2aWNlYWNjb3VudDprdWJlLXN5c3RlbTphcmdvY2QtbWFuYWdlciJ9.GPB-gZENQe_uzLJBHgtSTU_SMMAJWQbcc4dF1weJ6MEKCkRsekYHFKvBIwSIbV77-_6iDfpL-Iltu6Fkk8fRsybOZOBnmN5gT0Vf0xKvPLQ8dFtmKjzbX3Jxes01wNPm-nQTjAjjHDmLfPV0hg3Rch5z9-JkGV0HI27Cvew405fwb6Pg5-UdvdpXUgLrr_1SosJ47NaNi3EC_XA6gBiBSV84-3AHosxCbOOuxE4UN-sG1WL2JiNxAcpQTc5NffW68uEVtdarHmN6IyrKuh8TNbK4DlVwjpis_z4muvd3QjIkdeokl6IS8bW0Go_SyQcd4rzS-mmD9Ovz6xtrbAB8gA
     tlsClientConfig:
       insecure: true
       caData: ""
@@ -96,7 +104,7 @@ clusters:
 
   direct:
     bearerToken: 
-      eyJhbGciOiJSUzI1NiIsImtpZCI6InZ1TDQ4NnhQaDc3RjJVcE9Lbkp6WS0xbEg5TXJmVzVZZlRwdmIxZ0k1d0UifQ.eyJpc3MiOiJrdWJlcm5ldGVzL3NlcnZpY2VhY2NvdW50Iiwia3ViZXJuZXRlcy5pby9zZXJ2aWNlYWNjb3VudC9uYW1lc3BhY2UiOiJrdWJlLXN5c3RlbSIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VjcmV0Lm5hbWUiOiJhcmdvY2QtbWFuYWdlci10b2tlbiIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50Lm5hbWUiOiJhcmdvY2QtbWFuYWdlciIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50LnVpZCI6IjQ4YzQxMGZiLWQwYjItNDExOC05MmQ5LWIwMmIxZGIzNjEzMSIsInN1YiI6InN5c3RlbTpzZXJ2aWNlYWNjb3VudDprdWJlLXN5c3RlbTphcmdvY2QtbWFuYWdlciJ9.jgAhIGQeVYHrAE3MemqezfN5Nv3dWt7AKfCRSXBcLqsnh-vhyyDJipZnZR4Pm4VA8kHW9PRXisFyrt10jV0sUyXoD4DVJ9edJaYPpedppUV855JM28D-1z7SN1TCWMfPc2TfeFJomL4usxn-b6zihM2HRWoi4q6y9K9TUOob1jIDkj_2pQrw3bsbvyPZaswcT0khP3KZNi7qjcgl3NtRCdcSffh3GS_hxdQOoH2CiTLTCXaNTeAaJ1fUUPR-If4KBMG28PXXhioSCASsjrfKNY7DQG5B5XeU8As5jqn9zEzZODxHpOVrcfR5PUo0KREDZXfMxYVH_Z42Tu-bDpaSfg
+      eyJhbGciOiJSUzI1NiIsImtpZCI6IlBBSFZ2VXA4UkN6Q1d4SzQ4dW9ZbklhZFkyOHZBME9HUlFXQVFHanlLZzQifQ.eyJpc3MiOiJrdWJlcm5ldGVzL3NlcnZpY2VhY2NvdW50Iiwia3ViZXJuZXRlcy5pby9zZXJ2aWNlYWNjb3VudC9uYW1lc3BhY2UiOiJrdWJlLXN5c3RlbSIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VjcmV0Lm5hbWUiOiJhcmdvY2QtbWFuYWdlci10b2tlbiIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50Lm5hbWUiOiJhcmdvY2QtbWFuYWdlciIsImt1YmVybmV0ZXMuaW8vc2VydmljZWFjY291bnQvc2VydmljZS1hY2NvdW50LnVpZCI6IjI1NTVjZWNhLTdjMDYtNDMyYi05OTVkLTg1YmJmYTliOGFkYSIsInN1YiI6InN5c3RlbTpzZXJ2aWNlYWNjb3VudDprdWJlLXN5c3RlbTphcmdvY2QtbWFuYWdlciJ9.VizlaP1nss8hu9bybP0ylb_DE5YCGt5gA0teNeAKDfm1Jv21D-OkeBvNrPnOPC1xyYSBW-kT49rltYg6KwCARgnnnihh2VYd3cm9j5NbVoCI3MKQO0tpITa3KMTerQz98CTWmN4ZgYVMhYcpvAXk58HS4oRa0H7M61xV7w5eyiy3jfQjI24iljUA13Hjlhq6g4miEuJY558uOaMwkvUbnIsd5HW1hLwK1gp4C4XniRZvjjLjnk6S_3HD0ZACma5Gy-GLlnVvRJapl3SdG8I_v3-nOVmG9u7hBW1weSehkGkJ2OiYatiQMN8O3Xa7zTyWkkszhQlObwa02eUSz7szJw
     tlsClientConfig:
       insecure: true
       caData: ""

@@ -122,9 +122,8 @@ public class FailoverRepository {
     /**
      * Returns the count of non-tombstoned applications belonging to any of the given clusters.
      *
-     * <p>Mirrors the WHERE clause used by {@link #migrateApplicationPartitionForCluster} exactly:
-     * {@code CLUSTER_ID IN (...) AND DELETED_AT IS NULL}. No additional status or deletion-mode
-     * filter is applied — in-flight HARD_DELETE apps are included because migration moves them too.
+     * <p>No additional status or deletion-mode filter is applied — in-flight HARD_DELETE apps
+     * are included in the count.
      *
      * <p>Used by the dry-run path to report how many applications would be affected by the
      * failover without making any changes.
@@ -444,47 +443,23 @@ public class FailoverRepository {
     }
 
     /**
-     * Updates both {@code clusters.control_plane_id} and {@code clusters.cluster_partition_id}
-     * in a single statement for all given cluster IDs.
+     * Updates {@code clusters.control_plane_id} for all given cluster IDs.
      *
-     * <p>Under Option B (CP-scoped partitions) both FK columns must be updated atomically —
-     * updating CP without updating the partition would leave the cluster pointing to a
-     * CP1-scoped partition while now assigned to CP2.
+     * <p>Option A: cluster partitions are globally scoped — {@code cluster_partition_id}
+     * does NOT change during failover. Only the control-plane assignment is updated.
+     * The partition stays; the cluster's desired-state context (CP) moves.
      *
-     * @param clusterIds             list of cluster IDs to migrate
-     * @param targetCpId             the target control plane ID
-     * @param targetClusterPartitionId the CP2-scoped cluster partition to assign
+     * @param clusterIds list of cluster IDs to migrate
+     * @param targetCpId the target control plane ID
      * @return number of rows updated
      */
-    public int migrateClustersCpAndPartition(
-            List<UUID> clusterIds, UUID targetCpId, UUID targetClusterPartitionId) {
+    public int migrateClustersCp(List<UUID> clusterIds, UUID targetCpId) {
         if (clusterIds == null || clusterIds.isEmpty()) {
             return 0;
         }
         return dsl.update(CLUSTERS)
                 .set(CLUSTERS.CONTROL_PLANE_ID, targetCpId)
-                .set(CLUSTERS.CLUSTER_PARTITION_ID, targetClusterPartitionId)
                 .where(CLUSTERS.ID.in(clusterIds))
-                .execute();
-    }
-
-    /**
-     * Updates {@code applications.application_partition_id} for all non-deleted applications
-     * belonging to {@code clusterId}.
-     *
-     * <p>Moves ALL applications regardless of {@code deletion_mode} — apps in HARD_DELETE
-     * are deliberately included. The calling service (FailoverBatchService) emits a warning
-     * log when any HARD_DELETE apps are present; see {@link #findInflightHardDeleteAppsForClusters}.
-     *
-     * @param clusterId             the cluster whose apps are being migrated
-     * @param targetAppPartitionId  the CP2-scoped application partition to assign
-     * @return number of application rows updated
-     */
-    public int migrateApplicationPartitionForCluster(UUID clusterId, UUID targetAppPartitionId) {
-        return dsl.update(APPLICATIONS)
-                .set(APPLICATIONS.APPLICATION_PARTITION_ID, targetAppPartitionId)
-                .where(APPLICATIONS.CLUSTER_ID.eq(clusterId))
-                .and(APPLICATIONS.DELETED_AT.isNull())
                 .execute();
     }
 
@@ -707,13 +682,16 @@ public class FailoverRepository {
     // =========================================================================
 
     // =========================================================================
-    // Batch scheduler — Option B partition tracking
+    // Batch scheduler — partition tracking (for generation bumps)
     // =========================================================================
 
     /**
      * Returns the current {@code cluster_partition_id} for a given cluster.
-     * Captured before migration so the source partition UUID can be stored in
-     * {@code failover_operation_clusters} for use by the {@code /rollback} API.
+     * Used after migration to collect partition IDs whose generation should be bumped
+     * (so ArgoCD plugin polls see the updated CP fan-out).
+     *
+     * <p>In Option A the partition does NOT change during failover — this is a read-only
+     * lookup for the generation-bump step, not a pre-migration capture.
      *
      * @param clusterId the cluster UUID
      * @return the current cluster partition UUID (NOT NULL by schema constraint)
@@ -746,7 +724,7 @@ public class FailoverRepository {
     }
 
     // =========================================================================
-    // Batch scheduler — deletion guard (warn-only, Option B)
+    // Batch scheduler — deletion guard (warn-only)
     // =========================================================================
 
     /**
@@ -755,7 +733,7 @@ public class FailoverRepository {
      * @param clusterId              the cluster being migrated
      * @param appId                  the application UUID in HARD_DELETE state
      * @param appName                human-readable name (for warning log)
-     * @param currentAppPartitionId  the application's current partition before migration
+     * @param currentAppPartitionId  the application's current partition (for generation bump)
      */
     public record InflightHardDeleteApp(
             UUID clusterId,
@@ -904,20 +882,12 @@ public class FailoverRepository {
     // ---- Rollback ------------------------------------------------------------
 
     /**
-     * Minimal projection for rollback: just the cluster UUID and its pre-migration source CP.
+     * Minimal projection for rollback: the cluster UUID and its pre-migration source CP.
      *
-     * <p>Partition IDs are no longer stored — they are resolved dynamically at rollback time
-     * via {@link com.argocd.platform.api.service.PartitionService}:
-     * <ul>
-     *   <li>CP1 cluster partition: resolved via {@code resolveClusterPartitionForCp(srcCpId)}</li>
-     *   <li>CP1 app partition: resolved via {@code findApplicationPartitionForCluster(clusterId, srcCpId)}
-     *       (idempotency on retry-of-rollback), falling back to {@code resolveApplicationPartitionForCp}</li>
-     *   <li>CP2 partitions: read live from {@code clusters.cluster_partition_id} and
-     *       {@code applications.application_partition_id} via
-     *       {@code getCurrentClusterPartitionId} / {@code getCurrentApplicationPartitionIdForCluster}</li>
-     * </ul>
+     * <p>In Option A, partition IDs never change during failover — only
+     * {@code clusters.control_plane_id} is reverted. No partition FK tracking needed.
      *
-     * @param clusterId          the cluster UUID
+     * @param clusterId            the cluster UUID
      * @param sourceControlPlaneId CP1 — the CP to restore the cluster to
      */
     public record RollbackTarget(
@@ -952,44 +922,19 @@ public class FailoverRepository {
     }
 
     /**
-     * Restores a single cluster's {@code control_plane_id} and {@code cluster_partition_id}
-     * to their pre-migration (CP1) values.
+     * Restores a single cluster's {@code control_plane_id} to its pre-migration (CP1) value.
      *
-     * <p>Called during rollback, once per migrated cluster. The CP1 cluster partition ID is
-     * resolved dynamically by {@code FailoverBatchService.processRollback()} via
-     * {@link com.argocd.platform.api.service.PartitionService#resolveClusterPartitionForCp}
-     * rather than read from a stored column.
+     * <p>In Option A, {@code cluster_partition_id} does NOT change during failover or rollback —
+     * partitions are globally scoped. Only the control-plane assignment is reverted.
      *
-     * @param clusterId              the cluster to restore
-     * @param srcControlPlaneId      CP1 ID to restore to
-     * @param srcClusterPartitionId  CP1 cluster partition ID to restore to
+     * @param clusterId         the cluster to restore
+     * @param srcControlPlaneId CP1 ID to restore to
      * @return number of rows updated (expected: 1)
      */
-    public int restoreClusterToSource(UUID clusterId, UUID srcControlPlaneId, UUID srcClusterPartitionId) {
+    public int restoreClusterCp(UUID clusterId, UUID srcControlPlaneId) {
         return dsl.update(CLUSTERS)
                 .set(CLUSTERS.CONTROL_PLANE_ID, srcControlPlaneId)
-                .set(CLUSTERS.CLUSTER_PARTITION_ID, srcClusterPartitionId)
                 .where(CLUSTERS.ID.eq(clusterId))
-                .execute();
-    }
-
-    /**
-     * Restores {@code applications.application_partition_id} to the pre-migration source value
-     * for all non-tombstoned applications belonging to {@code clusterId}.
-     *
-     * <p>Only called when {@code sourceApplicationPartitionId} is non-null (i.e. the cluster had
-     * active applications at migration time). HARD_DELETE apps are included — same reasoning as
-     * {@link #migrateApplicationPartitionForCluster}: they must move with the cluster.
-     *
-     * @param clusterId              the cluster whose applications are being restored
-     * @param srcAppPartitionId      CP1 application partition ID to restore to
-     * @return number of application rows updated
-     */
-    public int restoreApplicationPartitionToSource(UUID clusterId, UUID srcAppPartitionId) {
-        return dsl.update(APPLICATIONS)
-                .set(APPLICATIONS.APPLICATION_PARTITION_ID, srcAppPartitionId)
-                .where(APPLICATIONS.CLUSTER_ID.eq(clusterId))
-                .and(APPLICATIONS.DELETED_AT.isNull())
                 .execute();
     }
 

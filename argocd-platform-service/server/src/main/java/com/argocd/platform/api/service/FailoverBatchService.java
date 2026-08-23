@@ -1,7 +1,6 @@
 package com.argocd.platform.api.service;
 
 import com.argocd.platform.api.cache.event.PartitionChangedEvent;
-import com.argocd.platform.api.config.PartitionProperties;
 import com.argocd.platform.api.repository.ApplicationRepository;
 import com.argocd.platform.api.repository.FailoverRepository;
 import com.argocd.platform.api.util.FailoverOperationStatus;
@@ -15,11 +14,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -53,12 +49,11 @@ import java.util.stream.Collectors;
  * {@code false} for the reset, and only becomes {@code true} when a real ArgoCD status
  * event — arriving in a later transaction — bumps {@code applications.updated_at}.
  *
- * <h3>CP-scoped partition migration (Option B)</h3>
- * <p>{@link #migrateBatch} now updates both {@code clusters.control_plane_id} and
- * {@code clusters.cluster_partition_id} atomically, and reassigns
- * {@code applications.application_partition_id} per cluster. Targeted
- * {@link PartitionChangedEvent}s (one per unique affected partition) replace the previous
- * full-cache-clear null/null event, minimising cache eviction blast radius.
+ * <h3>Global partition migration (Option A)</h3>
+ * <p>{@link #migrateBatch} updates only {@code clusters.control_plane_id} — partition FKs
+ * ({@code cluster_partition_id}, {@code application_partition_id}) are globally scoped and
+ * do NOT change during failover. Targeted {@link PartitionChangedEvent}s (one per unique
+ * affected partition) are still emitted so ArgoCD sees the updated CP fan-out.
  */
 @Slf4j
 @Service
@@ -68,7 +63,6 @@ public class FailoverBatchService {
     private final FailoverRepository failoverRepository;
     private final ApplicationRepository applicationRepository;
     private final PartitionService partitionService;
-    private final PartitionProperties partitionProperties;
     private final ApplicationEventPublisher eventPublisher;
 
     // =========================================================================
@@ -84,10 +78,9 @@ public class FailoverBatchService {
      *
      * <p>On success:
      * <ol>
-     *   <li>Migrates batch 1 clusters: updates {@code clusters.control_plane_id} and
-     *       {@code cluster_partition_id} (CP-scoped Option B), reassigns
-     *       {@code application_partition_id}, resets application statuses, stamps
-     *       {@code migrated_at}.</li>
+     *   <li>Migrates batch 1 clusters: updates {@code clusters.control_plane_id} only
+     *       (Option A — partition FKs are globally scoped and do not change),
+     *       resets application statuses, stamps {@code migrated_at}.</li>
      *   <li>Transitions the operation to {@code AWAITING_BATCH_CONFIRMATION} with
      *       {@code current_batch = 1}.</li>
      *   <li>Publishes targeted {@link PartitionChangedEvent}s (after commit) to flush
@@ -336,27 +329,20 @@ public class FailoverBatchService {
 
     /**
      * Rollback: reverses all migrated cluster assignments for a {@code TIMED_OUT} or
-     * {@code CANCELLED} operation, restoring source CP and partition FKs.
+     * {@code CANCELLED} operation, restoring the source control-plane assignment.
      *
-     * <h3>What is reversed</h3>
+     * <h3>What is reversed (Option A)</h3>
      * <p>Only clusters in {@code MIGRATED}, {@code CONFIRMED}, or {@code FAILED} status
-     * actually had their {@code control_plane_id} and partition FKs changed. For each:
+     * actually had their {@code control_plane_id} changed. For each:
      * <ul>
      *   <li>{@code clusters.control_plane_id} → {@code sourceControlPlaneId} (from FOC row)</li>
-     *   <li>{@code clusters.cluster_partition_id} → CP1 partition resolved dynamically via
-     *       {@link PartitionService#resolveClusterPartitionForCp}</li>
-     *   <li>{@code applications.application_partition_id} → CP1 app partition resolved via
-     *       {@link PartitionService#findApplicationPartitionForCluster} (or greedy fallback);
-     *       skipped if the cluster currently has no active applications</li>
+     *   <li>Partition FKs ({@code cluster_partition_id}, {@code application_partition_id}) are
+     *       <strong>not changed</strong> — they are globally scoped and were never modified
+     *       during migration. Only the generation is bumped to signal CP fan-out change.</li>
      * </ul>
      *
-     * <p>Partition IDs are resolved dynamically rather than read from stored columns because
-     * {@code migrateBatch()} bumps the generation on <em>both</em> source and target partitions
-     * during the forward pass — ArgoCD already reconciled the CP1 partition state by the time
-     * rollback runs, so any valid CP1 partition (same or different UUID) is correct.
-     *
      * <p>{@code PENDING} clusters (batches not yet started) are marked {@code ROLLED_BACK}
-     * but their FKs are not touched — they were never changed.
+     * but their FK is not touched — it was never changed.
      *
      * <h3>After rollback</h3>
      * <p>Application statuses are reset to UNKNOWN for reverted clusters so that the CP1
@@ -399,6 +385,7 @@ public class FailoverBatchService {
         log.info("Failover operation {}: rollback — reversing {} migrated cluster(s) to source CP",
                 op.getId(), targets.size());
 
+        // In Option A, only clusters.control_plane_id is restored — partition FKs are unchanged.
         Set<UUID> clusterPartitionsToInvalidate = new LinkedHashSet<>();
         Set<UUID> appPartitionsToInvalidate     = new LinkedHashSet<>();
         List<UUID> rolledBackClusterIds          = new ArrayList<>();
@@ -407,49 +394,21 @@ public class FailoverBatchService {
         for (FailoverRepository.RollbackTarget t : targets) {
             if (t.sourceControlPlaneId() == null) {
                 log.warn("Failover operation {}: cluster {} has no source CP recorded — " +
-                         "skipping FK rollback for this cluster", op.getId(), t.clusterId());
+                         "skipping rollback for this cluster", op.getId(), t.clusterId());
                 rolledBackClusterIds.add(t.clusterId());
                 continue;
             }
 
-            // Read current (CP2) partition IDs BEFORE restoring FKs — we need them for
-            // generation bumps so ArgoCD sees the CP2 partition lose this cluster.
-            UUID currentClusterPartitionId =
-                    failoverRepository.getCurrentClusterPartitionId(t.clusterId());
-            Optional<UUID> currentAppPartitionId =
-                    failoverRepository.getCurrentApplicationPartitionIdForCluster(t.clusterId());
+            // Collect partition IDs for generation bumps (partition does not change in Option A)
+            clusterPartitionsToInvalidate.add(
+                    failoverRepository.getCurrentClusterPartitionId(t.clusterId()));
+            failoverRepository.getCurrentApplicationPartitionIdForCluster(t.clusterId())
+                    .ifPresent(appPartitionsToInvalidate::add);
 
-            // Dynamically resolve the CP1 cluster partition (greedy, same logic as onboarding).
-            // We don't need the exact pre-migration partition — any valid CP1 partition is correct
-            // because migrateBatch() already bumped the CP1 partition generation during forward
-            // migration, so ArgoCD already reconciled the desired state for that partition.
-            UUID srcClusterPartitionId = partitionService.resolveClusterPartitionForCp(
-                    t.sourceControlPlaneId(), partitionProperties.getClusterTargetSize());
+            // Restore cluster: only revert control_plane_id back to CP1 (no partition FK change)
+            failoverRepository.restoreClusterCp(t.clusterId(), t.sourceControlPlaneId());
 
-            // Restore cluster FK: control_plane_id → CP1, cluster_partition_id → resolved CP1 partition
-            failoverRepository.restoreClusterToSource(
-                    t.clusterId(), t.sourceControlPlaneId(), srcClusterPartitionId);
-            // Both src (coming back online) and tgt (losing a cluster) need generation bumps
-            clusterPartitionsToInvalidate.add(srcClusterPartitionId);
-            clusterPartitionsToInvalidate.add(currentClusterPartitionId);
-
-            // Restore app partition only if the cluster currently has active apps on CP2
-            if (currentAppPartitionId.isPresent()) {
-                // Prefer a CP1 partition that already holds apps from this cluster
-                // (handles idempotency if rollback is retried after partial restoration).
-                // Falls back to greedy resolution when no CP1 partition holds these apps yet.
-                UUID srcAppPartitionId = partitionService
-                        .findApplicationPartitionForCluster(t.clusterId(), t.sourceControlPlaneId())
-                        .orElseGet(() -> partitionService.resolveApplicationPartitionForCp(
-                                t.sourceControlPlaneId(), partitionProperties.getApplicationTargetSize()));
-
-                failoverRepository.restoreApplicationPartitionToSource(t.clusterId(), srcAppPartitionId);
-                appsResetClusterIds.add(t.clusterId());
-                // Both src and tgt app partitions get generation bumps
-                appPartitionsToInvalidate.add(srcAppPartitionId);
-                appPartitionsToInvalidate.add(currentAppPartitionId.get());
-            }
-
+            appsResetClusterIds.add(t.clusterId());
             rolledBackClusterIds.add(t.clusterId());
         }
 
@@ -470,7 +429,7 @@ public class FailoverBatchService {
             applicationRepository.resetSyncAndHealthStatusForClusters(appsResetClusterIds);
         }
 
-        // Bump partition generations for all affected partitions
+        // Bump partition generations so ArgoCD sees the reverted CP fan-out
         if (!clusterPartitionsToInvalidate.isEmpty()) {
             partitionService.bumpClusterPartitionGenerations(clusterPartitionsToInvalidate);
         }
@@ -499,42 +458,34 @@ public class FailoverBatchService {
     }
 
     // =========================================================================
-    // Private — batch migration (Option B, 10-step flow)
+    // Private — batch migration (Option A, simplified flow)
     // =========================================================================
 
     /**
      * Migrates a single batch of clusters from their source CP to the operation's target CP,
-     * assigning CP-scoped partitions (Option B) and emitting targeted cache invalidation events.
+     * emitting targeted cache invalidation events so ArgoCD sees the updated CP fan-out.
+     *
+     * <p>In Option A (global partitions), cluster and application partition FKs do NOT change
+     * during failover — only {@code clusters.control_plane_id} is updated.
      *
      * <ol>
      *   <li><b>Deletion guard</b>: query for in-flight HARD_DELETE apps and emit a WARNING.
-     *       Migration continues regardless — apps are NOT excluded from partition reassignment.
-     *       See {@code DeletionStateTransitionTask.fallbackHardDeleteTimeout()} for the
-     *       deletion race window explanation and comments.</li>
-     *   <li><b>Resolve target cluster partition</b>: find or create a CP2-scoped cluster
-     *       partition with available capacity. One partition is resolved for the whole batch
-     *       (all batch clusters land together, preserving cluster-locality at the partition level).</li>
-     *   <li><b>Per-cluster: capture source IDs</b>: read the current
-     *       {@code cluster_partition_id} and {@code application_partition_id} before any write.
-     *       Source IDs are held in local maps for Steps 4, 7, and 8 — they are NOT persisted
-     *       to {@code failover_operation_clusters} (partition tracking columns were removed in
-     *       v1.0.13; rollback and retry resolve partitions dynamically instead).</li>
-     *   <li><b>Per-cluster: resolve target app partition</b>: prefer an existing CP2 partition
-     *       already holding apps from this cluster (idempotency on retry), else resolve greedily.</li>
-     *   <li><b>Migrate clusters</b>: atomic UPDATE sets both {@code control_plane_id} and
-     *       {@code cluster_partition_id} for all batch clusters.</li>
-     *   <li><b>Migrate app partitions</b>: per-cluster UPDATE of
-     *       {@code applications.application_partition_id}. All apps are moved,
-     *       including those in HARD_DELETE (warn-only — see step 1).</li>
-     *   <li><b>Bump generations</b>: increment generation on every unique source/target
-     *       cluster partition and application partition (signals desired-state change to ArgoCD).</li>
+     *       Migration continues regardless — the {@code deletion_partition_generation} fence
+     *       is reliable in Option A because {@code application_partition_id} never changes.</li>
+     *   <li><b>Collect partition IDs</b>: read the current {@code cluster_partition_id} and
+     *       {@code application_partition_id} for each batch cluster (needed for generation
+     *       bumps that signal CP fan-out changes to ArgoCD).</li>
+     *   <li><b>Migrate clusters</b>: atomic UPDATE sets {@code control_plane_id} for all
+     *       batch clusters. Partition FKs are unchanged.</li>
+     *   <li><b>Bump generations</b>: increment generation on the affected cluster and
+     *       application partitions to signal desired-state changes to ArgoCD.</li>
      *   <li><b>Reset app statuses</b>: resets sync/health to UNKNOWN. Uses the same
      *       {@code CURRENT_TIMESTAMP} as {@code migrated_at}, so the timestamp gate is
      *       {@code false} until a real ArgoCD event arrives.</li>
      *   <li><b>Mark MIGRATED</b>: stamps {@code migrated_at} and {@code status = MIGRATED}
      *       on {@code failover_operation_clusters} rows.</li>
      *   <li><b>Targeted cache events</b>: one {@link PartitionChangedEvent} per unique affected
-     *       partition (replaces the previous null/null full-clear broadcast).</li>
+     *       partition, deferred via {@code @TransactionalEventListener(AFTER_COMMIT)}.</li>
      * </ol>
      *
      * <p>Called from within an existing {@code @Transactional} method — all DB operations
@@ -556,98 +507,55 @@ public class FailoverBatchService {
         UUID targetCpId = op.getTargetControlPlaneId();
 
         // --- Step 1: Deletion guard (warn only — do NOT skip or block migration) ---
+        // In Option A, deletion_partition_generation fence is reliable: application_partition_id
+        // never changes during failover, so the fence value remains valid across CP moves.
         List<FailoverRepository.InflightHardDeleteApp> inflightDeletes =
                 failoverRepository.findInflightHardDeleteAppsForClusters(clusterIds);
         if (!inflightDeletes.isEmpty()) {
             String appNames = inflightDeletes.stream()
-                    .map(a -> a.appName() + " [cluster=" + a.clusterId() + ", partition=" + a.currentAppPartitionId() + "]")
+                    .map(a -> a.appName() + " [cluster=" + a.clusterId() + "]")
                     .collect(Collectors.joining(", "));
-            log.warn("Failover operation {}: batch {} — {} application(s) in HARD_DELETE state detected. " +
-                     "Their application_partition_id will be reassigned to the target CP partition, which " +
-                     "may invalidate the deletion_partition_generation fence used by " +
-                     "DeletionStateTransitionTask.fallbackHardDeleteTimeout(). " +
-                     "Migration proceeds. Monitor for delayed hard-delete finalizer confirmation. " +
-                     "Applications: [{}]",
+            log.warn("Failover operation {}: batch {} — {} application(s) in HARD_DELETE state. " +
+                     "Migration proceeds (partition_id unchanged in Option A). Applications: [{}]",
                      op.getId(), batchNumber, inflightDeletes.size(), appNames);
         }
 
-        // --- Step 2: Resolve target cluster partition for the whole batch ---
-        UUID targetClusterPartitionId = partitionService.resolveClusterPartitionForCp(
-                targetCpId, partitionProperties.getClusterTargetSize());
-
-        // --- Steps 3+4: Per-cluster — capture source IDs + resolve target app partition ---
-        // Ordered map preserves cluster order for deterministic logging.
-        Map<UUID, UUID> clusterToSrcClusterPartition = new LinkedHashMap<>();
-        Map<UUID, UUID> clusterToSrcAppPartition     = new LinkedHashMap<>();
-        Map<UUID, UUID> clusterToTgtAppPartition     = new LinkedHashMap<>();
-
-        for (UUID clusterId : clusterIds) {
-            // Step 3a: capture source cluster partition (before migration)
-            clusterToSrcClusterPartition.put(clusterId,
-                    failoverRepository.getCurrentClusterPartitionId(clusterId));
-
-            // Step 3b: capture source app partition (null if cluster has no active apps)
-            Optional<UUID> srcAppPart =
-                    failoverRepository.getCurrentApplicationPartitionIdForCluster(clusterId);
-            clusterToSrcAppPartition.put(clusterId, srcAppPart.orElse(null));
-
-            // Step 4: resolve target app partition (cluster-locality)
-            if (srcAppPart.isPresent()) {
-                // cluster-locality: reuse existing CP2 partition on retry, else greedy resolve
-                UUID tgtAppPart = partitionService
-                        .findApplicationPartitionForCluster(clusterId, targetCpId)
-                        .orElseGet(() -> partitionService.resolveApplicationPartitionForCp(
-                                targetCpId, partitionProperties.getApplicationTargetSize()));
-                clusterToTgtAppPartition.put(clusterId, tgtAppPart);
-            } else {
-                // No active apps — no app partition needed
-                clusterToTgtAppPartition.put(clusterId, null);
-            }
-        }
-
-        // --- Step 5: Migrate clusters (CP + cluster partition) in one batch UPDATE ---
-        int migratedClusters = failoverRepository.migrateClustersCpAndPartition(
-                clusterIds, targetCpId, targetClusterPartitionId);
-
-        // --- Step 6: Per-cluster app partition migration ---
-        // ALL apps are moved, including HARD_DELETE (warning already emitted in Step 1).
-        int totalAppsReassigned = 0;
-        for (UUID clusterId : clusterIds) {
-            UUID tgtAppPart = clusterToTgtAppPartition.get(clusterId);
-            if (tgtAppPart != null) {
-                totalAppsReassigned += failoverRepository.migrateApplicationPartitionForCluster(
-                        clusterId, tgtAppPart);
-            }
-        }
-
-        // --- Step 7: Bump generations on all affected partition IDs ---
+        // --- Step 2: Collect partition IDs for generation bumps ---
+        // Partitions do NOT change during failover (Option A). We read them now for the
+        // generation-bump step so ArgoCD sees the updated CP fan-out after migration.
         Set<UUID> clusterPartitionsToInvalidate = new LinkedHashSet<>();
-        clusterToSrcClusterPartition.values().stream()
-                .filter(Objects::nonNull).forEach(clusterPartitionsToInvalidate::add);
-        clusterPartitionsToInvalidate.add(targetClusterPartitionId);
-        partitionService.bumpClusterPartitionGenerations(clusterPartitionsToInvalidate);
+        Set<UUID> appPartitionsToInvalidate     = new LinkedHashSet<>();
+        for (UUID clusterId : clusterIds) {
+            clusterPartitionsToInvalidate.add(
+                    failoverRepository.getCurrentClusterPartitionId(clusterId));
+            failoverRepository.getCurrentApplicationPartitionIdForCluster(clusterId)
+                    .ifPresent(appPartitionsToInvalidate::add);
+        }
 
-        Set<UUID> appPartitionsToInvalidate = new LinkedHashSet<>();
-        clusterToSrcAppPartition.values().stream()
-                .filter(Objects::nonNull).forEach(appPartitionsToInvalidate::add);
-        clusterToTgtAppPartition.values().stream()
-                .filter(Objects::nonNull).forEach(appPartitionsToInvalidate::add);
+        // --- Step 3: Migrate clusters — update control_plane_id only ---
+        // cluster_partition_id is globally scoped and stays unchanged.
+        int migratedClusters = failoverRepository.migrateClustersCp(clusterIds, targetCpId);
+
+        // --- Step 4: Bump generations on affected partitions ---
+        // This signals a desired-state change to the ArgoCD ApplicationSet Plugin Generator:
+        // the same partition now fans out to different CPs.
+        partitionService.bumpClusterPartitionGenerations(clusterPartitionsToInvalidate);
         partitionService.bumpApplicationPartitionGenerations(appPartitionsToInvalidate);
 
-        // --- Step 8: Reset app statuses to UNKNOWN (same CURRENT_TIMESTAMP as migrated_at) ---
+        // --- Step 5: Reset app statuses to UNKNOWN (same CURRENT_TIMESTAMP as migrated_at) ---
         // Only resets active apps (deletion_mode IS NULL) — HARD_DELETE apps keep their status.
         int resetApps = applicationRepository.resetSyncAndHealthStatusForClusters(clusterIds);
 
-        // --- Step 9: Stamp migrated_at + mark MIGRATED on FOC rows ---
+        // --- Step 6: Stamp migrated_at + mark MIGRATED on FOC rows ---
         failoverRepository.markBatchMigrated(op.getId(), batchNumber);
 
-        log.info("Failover operation {}: batch {} migrated — clusters={}, apps_reassigned={}, apps_reset={}, " +
+        log.info("Failover operation {}: batch {} migrated — clusters={}, apps_reset={}, " +
                  "cluster_partitions_invalidated={}, app_partitions_invalidated={}",
-                op.getId(), batchNumber, migratedClusters, totalAppsReassigned, resetApps,
+                op.getId(), batchNumber, migratedClusters, resetApps,
                 clusterPartitionsToInvalidate.size(), appPartitionsToInvalidate.size());
 
-        // --- Step 10: Targeted cache invalidation (replaces null/null full-clear broadcast) ---
-        // One event per unique affected partition — minimises cache eviction blast radius.
+        // --- Step 7: Targeted cache invalidation ---
+        // One event per unique affected partition — deferred via @TransactionalEventListener(AFTER_COMMIT).
         for (UUID partitionId : clusterPartitionsToInvalidate) {
             eventPublisher.publishEvent(new PartitionChangedEvent(this, partitionId, PartitionType.CLUSTER));
         }

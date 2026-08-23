@@ -22,19 +22,14 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  # Named application-groups-{N}-{cpName} (not application-partition-…) to avoid a
-  # 3-level naming collision:
-  #   Layer 2 Application   : application-partition-{N}-{CP}  (created by argocd/managed AppSet)
-  #   Layer 3 ApplicationSet: application-groups-{N}-{CP}     ← this resource
-  #   Layer 4 Application   : application-group-{N}-{CP}      (created below)
-  # Under Option B controlPlane == cpName, so using "application-partition" at every
-  # level would produce three identically-named resources — a hard K8s conflict
-  # for the two Application kinds at layers 2 and 4.
-  name: application-groups-{{ .Values.partitionNumber }}-{{ .Values.cpName }}
+  # Named application-groups-{N} (Option A: globally unique partition numbers).
+  # The plugin returns one entry per CP for this partition (CP fan-out),
+  # so the inner template name uses {{ .controlPlane }} from the plugin response
+  # to produce distinct leaf Applications per CP.
+  name: application-groups-{{ .Values.partitionNumber }}
   namespace: argocd
   annotations:
     argocd-platform/partition-number: "{{ .Values.partitionNumber }}"
-    argocd-platform/cp-name: "{{ .Values.cpName }}"
     argocd-platform/generation: "{{ .Values.generation }}"
 
 spec:
@@ -49,13 +44,17 @@ spec:
           parameters:
             resource: "application-groups"
             partitionNumber: "{{ .Values.partitionNumber }}"
-            # Required by Option B: the plugin looks up the partition by (partitionNumber, cpName).
-            cpName: "{{ .Values.cpName }}"
+            # generation is included in the spec (not just metadata.annotations) so that when
+            # the partition generation changes, this ApplicationSet's spec changes → ArgoCD
+            # increments metadata.generation → controller reconciles immediately rather than
+            # waiting the requeueAfterSeconds safety-net poll (600 s).
+            # The plugin endpoint ignores this field (Map<String,String> — extra keys are safe).
+            generation: "{{ .Values.generation }}"
 
   template:
     metadata:
       # application-group-{N}-{controlPlane}: leaf Application that deploys application-registration.
-      # Distinct from the Layer 2 "application-partition-{N}-{CP}" Application above it.
+      # controlPlane comes from the plugin CP fan-out response (one entry per CP).
       name: 'application-group-{{ .Values.partitionNumber }}-{{ "{{ .controlPlane }}" }}'
       labels:
         # resource-type drives switch-case routing in ArgoCDStatusService.

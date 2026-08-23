@@ -2010,7 +2010,7 @@ Cluster credentials (API server tokens, TLS keys) and any ArgoCD API tokens are 
 
 ### Plugin Generator responses re-queried on every poll cycle
 
-> **Status: ✅ Completed** — Redis-backed `PluginCacheService` caches responses per `(resource, partitionNumber)` key with a configurable TTL (default 5 min). Cache is explicitly invalidated by `CacheInvalidationListener` on every `PartitionChangedEvent` published by service writes. `ArgoCDRefreshListener` triggers an immediate ArgoCD Application refresh after invalidation so the next poll cycle gets fresh data. Caching is opt-in via `CACHE_ENABLED=true`; local dev defaults to uncached.
+> **Status: ✅ Completed** — Redis-backed `PluginCacheService` caches responses per `(resource, partitionNumber)` key (e.g., `cluster-groups:3`) with a configurable TTL (default 5 min). Cache is explicitly invalidated by `CacheInvalidationListener` on every `PartitionChangedEvent` published by service writes. The generation bump on each mutation drives event-driven reconciliation via the Level 1 → Level 3 ApplicationSet hierarchy (≤ 10 s propagation) — `ArgoCDRefreshListener` is a permanent no-op per the one-way call constraint (ArgoCD always calls the Router Service, never the reverse). Caching is opt-in via `CACHE_ENABLED=true`; local dev defaults to uncached.
 
 At steady state, most Plugin Generator calls return unchanged data. At scale this creates unnecessary database load across thousands of partitions.
 
@@ -2207,3 +2207,109 @@ null  ──HARD_DELETE──►  deletion_mode = HARD_DELETE  ──partition s
 - **`deletionTimestamp` template fix** — The `platform-status-update` webhook template wraps `{{.app.metadata.deletionTimestamp}}` in `{{if ...}}...{{end}}` to prevent Go template rendering `"<no value>"` for unset pointer fields, which previously caused every sync notification to be misidentified as a deletion event.
 - **`on-deleted` trigger nil guard** — Changed condition from `!= ""` to `!= nil`; in expr-lang `nil != ""` evaluates to `true`, which caused the trigger to fire for every application on every notification cycle.
 - **`oncePer` for generation-based deduplication** — ArgoCD deduplicates notifications by Git revision fingerprint. Adding `oncePer: app.metadata.labels["argocd-platform/generation"]` ensures the `on-application-partition-synced` trigger fires once per partition generation change, not once ever — required for the HARD_DELETE event-driven flow to work across multiple deletions without a forced re-sync.
+
+---
+
+## 32.16 Event-Driven ApplicationSet Sync — Generation Bump Reference
+
+> **Status: ✅ Implemented** — Partition `generation` is embedded in the Level 3 ApplicationSet `spec.generators[0].plugin.input.parameters` (not just metadata annotations). Every mutation that produces a data change bumps the affected partition's `generation` counter. Level 1 ApplicationSets poll at 10 s; when they detect a changed `generation` they re-render the Level 2 Application via Helm → the Level 3 ApplicationSet spec changes → ArgoCD immediately reconciles Level 3 → fresh data within ≤ 10 s.
+
+### Architecture Overview
+
+```
+Mutation (API / failover / deletion)
+  └─► bumpXxxPartitionGeneration()               ← DB: generation counter +1
+        └─► PartitionChangedEvent (AFTER_COMMIT)
+              ├─► CacheInvalidationListener       ← Redis cache evicted
+              └─► ArgoCDRefreshListener           ← permanent no-op (see §32.16.1)
+
+Level 1 AppSet (requeueAfterSeconds: 10 s)
+  └─► GET /*/partitions                          ← tiny response: numbers + generations
+        └─► generation changed? → re-render Level 2 Application via Helm
+              └─► Level 3 AppSet spec changes (input.parameters.generation)
+                    └─► ArgoCD detects spec change → immediate reconcile
+                          └─► POST /api/v1/getparams.execute  ← fresh data from empty cache
+                                └─► Level 4 Applications created/updated/pruned
+```
+
+Level 3 `requeueAfterSeconds: 600` is a pure safety net for missed events.
+
+### §32.16.1 Why `ArgoCDRefreshListener` is a Permanent No-Op
+
+The Router Service enforces a **strict one-way call contract**: ArgoCD always calls the Router Service; the Router Service never calls ArgoCD. This eliminates mutual TLS complexity, ArgoCD credential management in the service, and circular dependency during bootstrap. The generation-propagation hierarchy makes an outbound refresh call unnecessary — see `ArgoCDRefreshListener` Javadoc for the full architectural rationale.
+
+### §32.16.2 Generation Bump Catalogue
+
+The table below lists every operation that bumps a partition `generation`, the specific method called, the event trigger it produces, and the end-to-end flow that causes ArgoCD to reconcile.
+
+**Key to columns:**
+- **Operation** — what the caller does
+- **Partition type** — which partition table is bumped (`cluster_partitions`, `application_partitions`, `project_partitions`)
+- **Bump method** — the `PartitionRepository` or `PartitionService` method called
+- **Event** — `PartitionChangedEvent` published (drives Redis eviction + Level 1 detection)
+- **ArgoCD trigger** — how the generation change propagates to ArgoCD reconciliation
+
+---
+
+#### Cluster Partition Generation Bumps
+
+| # | Operation | Partition scope | Bump method | Event | ArgoCD trigger |
+|---|-----------|----------------|-------------|-------|---------------|
+| C1 | `ClusterService.create` — cluster placed in existing partition (capacity < target) | Global cluster partition (the assigned one; globally unique `partition_number`) | `PartitionRepository.resolveClusterPartition` → `bumpClusterPartitionGeneration` | `PartitionChangedEvent(CLUSTER)` | L1 sees new generation → L2 re-renders → L3 spec changes → immediate reconcile |
+| C2 | `ClusterService.create` — all partitions full; new partition created | New global cluster partition (generation = 0, new globally unique partition number) | `PartitionRepository.createClusterPartition` (new row, generation = 0) | `PartitionChangedEvent(CLUSTER)` | L1 sees new partition in response → L2 re-renders new Application → L3 AppSet created |
+| C3 | `ClusterService.update` — cluster config changed (server, namespaces, labels, auth) | Global cluster partition of the updated cluster | `PartitionService.bumpClusterPartitionGeneration` | `PartitionChangedEvent(CLUSTER)` | L1 sees new generation → L2 re-renders → L3 reconciles → updated cluster data pushed to CP |
+| C4 | `ClusterService.delete` — cluster removed | Global cluster partition of the deleted cluster | `PartitionService.bumpClusterPartitionGeneration` | `PartitionChangedEvent(CLUSTER)` | L1 sees new generation → L2 re-renders → L3 reconciles → cluster removed from CP |
+| C5 | `FailoverBatchService.migrateBatch` — forward migration | CP1 (source) cluster partition(s) **and** CP2 (target) cluster partition | `PartitionService.bumpClusterPartitionGenerations` (batch) | `PartitionChangedEvent(CLUSTER)` per partition | Both CP1 and CP2 L3 AppSets reconcile: CP1 removes cluster, CP2 adds cluster |
+| C6 | `FailoverBatchService.processRetry` — re-stamp FAILED → MIGRATED | CP2 (current) cluster partition(s) of retried clusters | `PartitionService.bumpClusterPartitionGenerations` (batch) | `PartitionChangedEvent(CLUSTER)` per partition | CP2 L3 reconciles → updated_at on CP2 cluster record refreshed → confirmation gate re-opens |
+| C7 | `FailoverBatchService.processRollback` — reverse migration to source CP | CP2 (current) **and** CP1 (source) cluster partitions | `PartitionService.bumpClusterPartitionGenerations` (batch) | `PartitionChangedEvent(CLUSTER)` per partition | Both CP2 and CP1 L3 AppSets reconcile: CP2 removes cluster, CP1 restores it |
+
+---
+
+#### Application Partition Generation Bumps
+
+| # | Operation | Partition scope | Bump method | Event | ArgoCD trigger |
+|---|-----------|----------------|-------------|-------|---------------|
+| A1 | `ApplicationService.create` — app placed in existing partition | Global app partition (the assigned one; globally unique `partition_number`) | `PartitionRepository.resolveApplicationPartition` → `bumpApplicationPartitionGeneration` | `PartitionChangedEvent(APPLICATION)` | L1 → L3 reconcile → new Application appears in app-registration chart on CP |
+| A2 | `ApplicationService.create` — all partitions full; new partition created | New global app partition (generation = 0, new globally unique partition number) | `createApplicationPartition` (new row) | `PartitionChangedEvent(APPLICATION)` | L1 sees new partition → new L3 AppSet created → new app appears on CP |
+| A3 | `ApplicationService.update` — app sources updated | App partition of the updated application | `PartitionService.bumpApplicationPartitionGeneration` (returns new generation) | `PartitionChangedEvent(APPLICATION)` | L1 → L3 reconcile → updated sources in app-registration chart on CP |
+| A4 | `ApplicationService.initiateDelete` (SOFT_DELETE) — app excluded from response | App partition of the deleted application | `PartitionService.bumpApplicationPartitionGeneration` | `PartitionChangedEvent(APPLICATION)` | L1 → L3 reconcile → app absent from response → ArgoCD prunes Application (no cascade) |
+| A5 | `ApplicationService.initiateDelete` (HARD_DELETE) — finalizer manifest applied | App partition of the deleted application | `PartitionService.bumpApplicationPartitionGeneration` (returned value stored as `deletion_partition_generation`) | `PartitionChangedEvent(APPLICATION)` | L1 → L3 reconcile → `hardDelete: true` in response → ArgoCD syncs `resources-finalizer` |
+| A6 | `ArgoCDStatusService.processApplicationPartitionEvent` — HARD_DELETE → AWAITING_PRUNE confirmed by sync event | App partition of each transitioned application | `PartitionService.bumpApplicationPartitionGeneration` | `PartitionChangedEvent(APPLICATION)` | L1 → L3 reconcile → app absent from response → ArgoCD cascade-prunes managed K8s resources |
+| A7 | `DeletionStateTransitionTask.fallbackHardDeleteTimeout` — HARD_DELETE → AWAITING_PRUNE fallback (missed notification) | App partition of each force-transitioned application | `PartitionService.bumpApplicationPartitionGeneration` | `PartitionChangedEvent(APPLICATION)` | L1 → L3 reconcile → app absent → ArgoCD prunes (same as A6, triggered by scheduler instead of webhook) |
+| A8 | `FailoverBatchService.migrateBatch` — forward migration | CP1 (source) app partition(s) **and** CP2 (target) app partition(s) | `PartitionService.bumpApplicationPartitionGenerations` (batch) | `PartitionChangedEvent(APPLICATION)` per partition | CP1 L3 removes apps; CP2 L3 creates apps on target CP; `updated_at` gate starts |
+| A9 | `FailoverBatchService.processRetry` — re-stamp FAILED → MIGRATED | CP2 (current) app partition(s) of retried clusters | `PartitionService.bumpApplicationPartitionGenerations` (batch) | `PartitionChangedEvent(APPLICATION)` per partition | CP2 L3 reconciles → app `updated_at` refreshed → confirmation gate re-opens |
+| A10 | `FailoverBatchService.processRollback` — reverse migration to source CP | CP2 (current) **and** CP1 (source) app partitions | `PartitionService.bumpApplicationPartitionGenerations` (batch) | `PartitionChangedEvent(APPLICATION)` per partition | Both CP2 and CP1 L3 reconcile: apps removed from CP2, restored on CP1 |
+
+---
+
+#### Project Partition Generation Bumps
+
+| # | Operation | Partition scope | Bump method | Event | ArgoCD trigger |
+|---|-----------|----------------|-------------|-------|---------------|
+| P1 | `ProjectService.create` — project placed in existing partition | Global project partition (the assigned one) | `PartitionRepository.resolveProjectPartition` → `bumpProjectPartitionGeneration` | `PartitionChangedEvent(PROJECT)` | L1 → L3 reconcile → new AppProject created on all CPs |
+| P2 | `ProjectService.create` — all partitions full; new partition created | New project partition (generation = 0) | `createProjectPartition` (new row) | `PartitionChangedEvent(PROJECT)` | L1 sees new partition → new L3 AppSet created → new AppProject pushed to all CPs |
+| P3 | `ProjectService.update` — project description or cluster associations changed | Global project partition of the updated project | `PartitionService.bumpProjectPartitionGeneration` | `PartitionChangedEvent(PROJECT)` | L1 → L3 reconcile → updated AppProject (allowed cluster list, etc.) pushed to all CPs |
+| P4 | `ProjectService.delete` — project removed (cascades to apps via DB FK) | Global project partition of the deleted project | `PartitionService.bumpProjectPartitionGeneration` | `PartitionChangedEvent(PROJECT)` | L1 → L3 reconcile → AppProject absent from response → ArgoCD prunes AppProject from all CPs |
+
+---
+
+#### Control Plane Changes (Full Cache Clear — No Generation Bump)
+
+| # | Operation | What happens | Why no bump |
+|---|-----------|-------------|------------|
+| X1 | `ControlPlaneService.delete` — control plane removed | `PartitionChangedEvent(null, null)` published → `CacheInvalidationListener` clears **entire** Redis cache | CP changes affect all partition types simultaneously (cluster, project, application). There is no single partition to bump. A full clear ensures no CP-scoped stale entries remain. Level 1 and Level 3 poll on schedule; the 10 s Level 1 window is the effective propagation lag. |
+
+> **Note on §X1:** Because no generation is bumped, CP deletion propagation to ArgoCD relies on the Level 3 safety-net poll (≤ 600 s). This is acceptable: CP deletion is a rare, operator-initiated event (not a user-facing real-time mutation), and ArgoCD would eventually reconcile via polling regardless. A future improvement could publish targeted events across all partitions for a deleted CP, but the blast radius is unpredictable.
+
+---
+
+### §32.16.3 Propagation Latency Summary
+
+| Scenario | Propagation path | Worst-case latency |
+|----------|-----------------|-------------------|
+| Normal mutation (create/update/delete for any resource) | Generation bump → Level 1 detects (≤ 10 s) → Level 3 immediate reconcile | ≤ 10 s |
+| HARD_DELETE → finalizer sync (A5) | Bump at `initiateDelete` → L1 → L3 → ArgoCD applies finalizer → `on-application-partition-synced` → bump at A6 → L1 → L3 → app pruned | ≤ 20 s + ArgoCD sync time |
+| Failover batch migration (C5, A8) | Bump after `migrateBatch` → L1 → both CP1 + CP2 L3 reconcile | ≤ 10 s |
+| Missed webhook fallback (A7) | `fallbackHardDeleteTimeout` fires after 300 s → bump → L1 → L3 | 300 s + ≤ 10 s |
+| Control plane deletion (X1) | No generation bump; Level 3 polls on schedule | ≤ 600 s |
+| New partition created (first resource in partition) | Generation = 0, but Level 1 sees new partition number → L2 Application created → L3 AppSet created | ≤ 10 s |

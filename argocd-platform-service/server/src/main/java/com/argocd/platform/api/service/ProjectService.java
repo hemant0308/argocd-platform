@@ -105,6 +105,9 @@ public class ProjectService {
             projectRepository.saveProjectClusters(id, clusterIds);
         }
 
+        // Bump generation so Level 1 partition-list response carries the new value,
+        // triggering event-driven Level 3 ApplicationSet reconciliation within ~10 s.
+        partitionService.bumpProjectPartitionGeneration(existing.getProjectPartitionId());
         eventPublisher.publishEvent(
                 new PartitionChangedEvent(this, existing.getProjectPartitionId(), PartitionType.PROJECT));
 
@@ -169,6 +172,8 @@ public class ProjectService {
                 .orElseThrow(() -> new ResourceNotFoundException("Project not found: " + id));
         UUID partitionId = existing.getProjectPartitionId();
         projectRepository.deleteById(id);
+        // Bump generation so removal is reflected in the Level 1 poll within ~10 s.
+        partitionService.bumpProjectPartitionGeneration(partitionId);
         eventPublisher.publishEvent(new PartitionChangedEvent(this, partitionId, PartitionType.PROJECT));
     }
 

@@ -1,13 +1,10 @@
 partitionNumber: ""
 
-# Control plane name that owns this partition (CP-scoped, Option B).
-# Injected from the outer application-partitions ApplicationSet via valuesObject.
-# Forwarded to the application-groups plugin so it can look up the partition by
-# (partitionNumber, cpName). Also used to uniquify this ApplicationSet's name
-# so that two CPs with the same partitionNumber don't collide.
-cpName: ""
-
+# Generation — bumped in the DB whenever applications are added to or removed
+# from this partition. Embedding it as an annotation on the inner ApplicationSet
+# causes ArgoCD to re-sync this chart and re-evaluate the plugin generator.
 generation: ""
+
 repoURL: https://github.com/hemant0308/argocd-platform.git
 targetRevision: main
 

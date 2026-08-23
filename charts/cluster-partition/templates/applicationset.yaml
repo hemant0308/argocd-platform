@@ -18,19 +18,14 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  # Named cluster-groups-{N}-{cpName} (not cluster-partition-…) to avoid a
-  # 3-level naming collision:
-  #   Layer 2 Application   : cluster-partition-{N}-{CP}  (created by argocd/managed AppSet)
-  #   Layer 3 ApplicationSet: cluster-groups-{N}-{CP}     ← this resource
-  #   Layer 4 Application   : cluster-group-{N}-{CP}      (created below)
-  # Under Option B controlPlane == cpName, so using "cluster-partition" at every
-  # level would produce three identically-named resources — a hard K8s conflict
-  # for the two Application kinds at layers 2 and 4.
-  name: cluster-groups-{{ .Values.partitionNumber }}-{{ .Values.cpName }}
+  # Named cluster-groups-{N} (Option A: globally unique partition numbers).
+  # The plugin returns one entry per CP for this partition (CP fan-out),
+  # so the inner template name uses {{ .controlPlane }} from the plugin response
+  # to produce distinct leaf Applications per CP.
+  name: cluster-groups-{{ .Values.partitionNumber }}
   namespace: argocd
   annotations:
     argocd-platform/partition-number: "{{ .Values.partitionNumber }}"
-    argocd-platform/cp-name: "{{ .Values.cpName }}"
     argocd-platform/generation: "{{ .Values.generation }}"
 
 spec:
@@ -45,13 +40,14 @@ spec:
           parameters:
             resource: "cluster-groups"
             partitionNumber: "{{ .Values.partitionNumber }}"
-            # Required by Option B: the plugin looks up the partition by (partitionNumber, cpName).
-            cpName: "{{ .Values.cpName }}"
+            # generation in spec (not just annotations) triggers spec-level change on bump →
+            # ArgoCD increments metadata.generation → controller reconciles immediately.
+            generation: "{{ .Values.generation }}"
 
   template:
     metadata:
       # cluster-group-{N}-{controlPlane}: leaf Application that deploys cluster-registration.
-      # Distinct from the Layer 2 "cluster-partition-{N}-{CP}" Application above it.
+      # controlPlane comes from the plugin CP fan-out response (one entry per CP).
       name: 'cluster-group-{{ .Values.partitionNumber }}-{{ "{{ .controlPlane }}" }}'
       labels:
         argocd-platform/resource-type: cluster

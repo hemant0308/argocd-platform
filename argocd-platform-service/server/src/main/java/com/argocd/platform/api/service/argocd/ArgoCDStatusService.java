@@ -5,6 +5,7 @@ import com.argocd.platform.api.model.request.argocd.ArgoCDStatusRequest;
 import com.argocd.platform.api.repository.ApplicationRepository;
 import com.argocd.platform.api.repository.ClusterRepository;
 import com.argocd.platform.api.repository.ProjectRepository;
+import com.argocd.platform.api.service.PartitionService;
 import com.argocd.platform.api.util.DeletionMode;
 import com.argocd.platform.api.util.HealthStatus;
 import com.argocd.platform.api.util.PartitionType;
@@ -67,6 +68,7 @@ public class ArgoCDStatusService {
     private final ClusterRepository clusterRepository;
     private final ProjectRepository projectRepository;
     private final ApplicationRepository applicationRepository;
+    private final PartitionService partitionService;
     private final ApplicationEventPublisher eventPublisher;
 
     @Transactional
@@ -206,10 +208,15 @@ public class ArgoCDStatusService {
                 log.info("Event-driven transition: app '{}' ({}) HARD_DELETE → AWAITING_PRUNE " +
                          "confirmed by partition-{} cp='{}' sync at generation {}",
                         c.name(), c.id(), partitionNumber, controlPlane, syncedGeneration);
+                // Bump the partition generation so Level 1 (requeueAfterSeconds: 10 s) detects
+                // the change on its next poll, triggering an immediate Level 3 reconcile that
+                // excludes this AWAITING_PRUNE app from the plugin response. Without the bump,
+                // Level 3 would wait up to its 600 s safety-net poll before pruning the app.
+                // The subsequent on-application-partition-synced event finds no HARD_DELETE
+                // candidates (now AWAITING_PRUNE) and is a no-op — the loop terminates.
+                partitionService.bumpApplicationPartitionGeneration(c.applicationPartitionId());
                 // Cache invalidation: app now excluded from plugin response →
                 // ArgoCD prunes the Application with resources-finalizer → on-deleted fires.
-                // This does cause one more application-partition sync, but subsequent events
-                // find no HARD_DELETE candidates (now AWAITING_PRUNE) and are no-ops.
                 eventPublisher.publishEvent(
                         new PartitionChangedEvent(this, c.applicationPartitionId(), PartitionType.APPLICATION));
             } else {

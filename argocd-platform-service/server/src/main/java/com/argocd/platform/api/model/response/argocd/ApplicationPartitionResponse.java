@@ -14,8 +14,6 @@ import java.util.UUID;
 public class ApplicationPartitionResponse {
     private UUID id;
     private Integer partitionNumber;
-    /** Name of the control plane that owns this partition (CP-scoped, Option B). */
-    private String controlPlaneName;
     private Long generation;
     private Integer applicationCount;
 }

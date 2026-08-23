@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
+
+    <!-- =========================================================
+         Option A — Revert to global resource-level partitions.
+
+         Architectural decision (permanent):
+           Control planes are stateless. Only clusters have a
+           relationship with control planes. All other resources
+           (partitions) should be derived from that relationship.
+
+         This changeset reverses v1.0.11 (CP-scoped partitions):
+           - Drops the FK, composite unique, and index that tied
+             cluster_partitions / application_partitions to a
+             specific control plane.
+           - Drops the control_plane_id column from both tables.
+           - Restores the global UNIQUE(partition_number) constraint
+             on each table.
+
+         Duplicate partition numbers:
+           Under Option B (v1.0.11) two CPs could each have a
+           partition numbered 1. Before the global unique constraint
+           can be re-applied we renumber partitions with ROW_NUMBER()
+           so every partition_number is globally distinct. On a fresh
+           or single-CP development database this is a no-op.
+
+         project_partitions: unchanged — was never CP-scoped.
+         ========================================================= -->
+
+    <!-- ===================== cluster_partitions ===================== -->
+
+    <changeSet id="v1.0.14-cluster-partitions-drop-fk-index" author="argocd-platform">
+        <dropIndex tableName="cluster_partitions" indexName="idx_cluster_partitions_cp_id"/>
+        <dropForeignKeyConstraint baseTableName="cluster_partitions"
+                                  constraintName="fk_cluster_partitions_cp"/>
+
+        <rollback>
+            <addForeignKeyConstraint
+                    baseTableName="cluster_partitions"
+                    baseColumnNames="control_plane_id"
+                    referencedTableName="control_planes"
+                    referencedColumnNames="id"
+                    constraintName="fk_cluster_partitions_cp"/>
+            <createIndex indexName="idx_cluster_partitions_cp_id" tableName="cluster_partitions">
+                <column name="control_plane_id"/>
+            </createIndex>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.14-cluster-partitions-drop-composite-unique" author="argocd-platform">
+        <dropUniqueConstraint tableName="cluster_partitions"
+                              constraintName="uq_cluster_partitions_cp_number"/>
+
+        <rollback>
+            <addUniqueConstraint tableName="cluster_partitions"
+                                 columnNames="control_plane_id, partition_number"
+                                 constraintName="uq_cluster_partitions_cp_number"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.14-cluster-partitions-renumber" author="argocd-platform">
+        <!-- Assign globally unique partition_numbers before re-applying the
+             global unique constraint. On a fresh or single-CP database the
+             ROW_NUMBER() output is already unique and this is effectively a no-op. -->
+        <sql>
+            UPDATE cluster_partitions cp
+            SET partition_number = rn.new_number
+            FROM (
+                SELECT id, ROW_NUMBER() OVER (ORDER BY partition_number, id) AS new_number
+                FROM cluster_partitions
+            ) rn
+            WHERE cp.id = rn.id;
+        </sql>
+
+        <rollback><!-- renumbering is not reversible without the original values --></rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.14-cluster-partitions-restore-global-unique" author="argocd-platform">
+        <addUniqueConstraint tableName="cluster_partitions"
+                             columnNames="partition_number"
+                             constraintName="cluster_partitions_partition_number_key"/>
+
+        <rollback>
+            <dropUniqueConstraint tableName="cluster_partitions"
+                                  constraintName="cluster_partitions_partition_number_key"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.14-cluster-partitions-drop-column" author="argocd-platform">
+        <dropColumn tableName="cluster_partitions" columnName="control_plane_id"/>
+
+        <rollback>
+            <addColumn tableName="cluster_partitions">
+                <column name="control_plane_id" type="UUID">
+                    <constraints nullable="true"/>
+                </column>
+            </addColumn>
+        </rollback>
+    </changeSet>
+
+    <!-- =================== application_partitions =================== -->
+
+    <changeSet id="v1.0.14-application-partitions-drop-fk-index" author="argocd-platform">
+        <dropIndex tableName="application_partitions" indexName="idx_application_partitions_cp_id"/>
+        <dropForeignKeyConstraint baseTableName="application_partitions"
+                                  constraintName="fk_application_partitions_cp"/>
+
+        <rollback>
+            <addForeignKeyConstraint
+                    baseTableName="application_partitions"
+                    baseColumnNames="control_plane_id"
+                    referencedTableName="control_planes"
+                    referencedColumnNames="id"
+                    constraintName="fk_application_partitions_cp"/>
+            <createIndex indexName="idx_application_partitions_cp_id" tableName="application_partitions">
+                <column name="control_plane_id"/>
+            </createIndex>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.14-application-partitions-drop-composite-unique" author="argocd-platform">
+        <dropUniqueConstraint tableName="application_partitions"
+                              constraintName="uq_application_partitions_cp_number"/>
+
+        <rollback>
+            <addUniqueConstraint tableName="application_partitions"
+                                 columnNames="control_plane_id, partition_number"
+                                 constraintName="uq_application_partitions_cp_number"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.14-application-partitions-renumber" author="argocd-platform">
+        <sql>
+            UPDATE application_partitions ap
+            SET partition_number = rn.new_number
+            FROM (
+                SELECT id, ROW_NUMBER() OVER (ORDER BY partition_number, id) AS new_number
+                FROM application_partitions
+            ) rn
+            WHERE ap.id = rn.id;
+        </sql>
+
+        <rollback><!-- renumbering is not reversible without the original values --></rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.14-application-partitions-restore-global-unique" author="argocd-platform">
+        <addUniqueConstraint tableName="application_partitions"
+                             columnNames="partition_number"
+                             constraintName="application_partitions_partition_number_key"/>
+
+        <rollback>
+            <dropUniqueConstraint tableName="application_partitions"
+                                  constraintName="application_partitions_partition_number_key"/>
+        </rollback>
+    </changeSet>
+
+    <changeSet id="v1.0.14-application-partitions-drop-column" author="argocd-platform">
+        <dropColumn tableName="application_partitions" columnName="control_plane_id"/>
+
+        <rollback>
+            <addColumn tableName="application_partitions">
+                <column name="control_plane_id" type="UUID">
+                    <constraints nullable="true"/>
+                </column>
+            </addColumn>
+        </rollback>
+    </changeSet>
+
+    <!-- project_partitions: intentionally unchanged (already global) -->
+
+</databaseChangeLog>
