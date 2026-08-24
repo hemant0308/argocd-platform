@@ -54,7 +54,10 @@ MANAGED_PORT = 8082                                        # local port for mana
 CP_BASE_PORT = 8083                                        # first port assigned to cp-1, cp-2, …
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-VALUES_FILE = SCRIPT_DIR.parent / "argocd" / "managed" / "values.yaml"
+REPO_ROOT = SCRIPT_DIR.parent
+VALUES_FILE = REPO_ROOT / "argocd" / "managed" / "values.yaml"
+BOOTSTRAP_FILE = REPO_ROOT / "bootstrap" / "application.yaml"
+MANAGED_ARGOCD_DIR = REPO_ROOT / "bootstrap" / "managed-argocd"
 
 # Set at startup from --api argument
 _api_base: str = DEFAULT_API_URL
@@ -185,6 +188,58 @@ metadata:
     kubernetes.io/service-account.name: {SERVICE_ACCOUNT}
 type: kubernetes.io/service-account-token
 """)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Managed ArgoCD bootstrap
+# ──────────────────────────────────────────────────────────────────────────────
+
+def bootstrap_managed_argocd() -> None:
+    """
+    Replicate bootstrap/managed-argocd/install.sh in Python:
+
+      1. helm repo add argo https://argoproj.github.io/argo-helm
+      2. helm repo update
+      3. kubectl create namespace argocd  (idempotent via --dry-run | apply)
+      4. helm upgrade --install argocd argo/argo-cd  \\
+             --namespace argocd  \\
+             --kube-context kind-managed  \\
+             --values bootstrap/managed-argocd/values.yaml
+    """
+    context = "kind-managed"
+    namespace = "argocd"
+    values_file = MANAGED_ARGOCD_DIR / "values.yaml"
+
+    if not values_file.exists():
+        warn(f"Helm values not found at {values_file} — skipping managed ArgoCD install.")
+        return
+
+    info("Adding Argo Helm repository…")
+    run_show(["helm", "repo", "add", "argo", "https://argoproj.github.io/argo-helm"], check=False)
+
+    info("Updating Helm repositories…")
+    run_show(["helm", "repo", "update"])
+
+    info(f"Creating namespace '{namespace}' (idempotent)…")
+    ns_yaml = run_capture([
+        "kubectl", "--context", context,
+        "create", "namespace", namespace,
+        "--dry-run=client", "-o", "yaml",
+    ])
+    run_show(
+        ["kubectl", "--context", context, "apply", "-f", "-"],
+        stdin_text=ns_yaml,
+    )
+
+    info("Installing managed ArgoCD via Helm…")
+    run_show([
+        "helm", "upgrade", "--install", "argocd", "argo/argo-cd",
+        "--namespace", namespace,
+        "--kube-context", context,
+        "--values", str(values_file),
+    ])
+
+    info("Managed ArgoCD installation complete.")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1004,6 +1059,7 @@ Examples:
 ║          ArgoCD Platform — Local Environment Seeder      ║
 ╚══════════════════════════════════════════════════════════╝""")
         print(f"""
+  Managed cluster : managed  (always created first)
   Control planes  : {args.control_planes}  (cp-1 … cp-{args.control_planes})
   Destinations    : {args.destinations}  (dest-1 … dest-{args.destinations})
   Projects        : {args.projects}  (project1 … project{args.projects})
@@ -1013,7 +1069,7 @@ Examples:
   Values file     : {VALUES_FILE}
 """)
 
-        _check_tools("kind", "kubectl")
+        _check_tools("kind", "kubectl", "helm")
 
         try:
             api_get("/api/v1/control-planes")
@@ -1022,6 +1078,19 @@ Examples:
             sys.exit(1)
 
         try:
+            log("Phase 0 — Managed Cluster")
+            ensure_kind_cluster("managed")
+            bootstrap_managed_argocd()
+            if BOOTSTRAP_FILE.exists():
+                info(f"Applying bootstrap Application: {BOOTSTRAP_FILE.name}")
+                run_show([
+                    "kubectl", "apply",
+                    "-f", str(BOOTSTRAP_FILE),
+                    "--context", "kind-managed",
+                ])
+            else:
+                warn(f"Bootstrap file not found at {BOOTSTRAP_FILE} — skipping.")
+
             cp_records = phase_control_planes(args.control_planes)
             dest_records = phase_destinations(args.destinations, cp_records)
             project_records = phase_projects(args.projects, dest_records)
