@@ -20,5 +20,6 @@
     <include file="db/changelog/changes/v1.0.12-failover-partition-tracking.xml"/>
     <include file="db/changelog/changes/v1.0.13-drop-failover-partition-tracking.xml"/>
     <include file="db/changelog/changes/v1.0.14-revert-cp-scoped-partitions.xml"/>
+    <include file="db/changelog/changes/v1.0.15-applicationsets.xml"/>
 
 </databaseChangeLog>

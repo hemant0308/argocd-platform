@@ -1,0 +1,21 @@
+# Partition number — injected from the inner applicationset-partition ApplicationSet.
+partitionNumber: ""
+
+# Name of the control plane this Application is deployed to (e.g. "cp-1").
+# Used as a label on each ArgoCD ApplicationSet for filtering and auditing.
+controlPlane: ""
+
+# JSON array of applicationsets to create. Serialised by ArgoCD goTemplate
+# ({{ .applicationSets | toJson }}) from the native array returned by the
+# applicationset-groups plugin. Default is an empty JSON array so that
+# 'helm template' works without a -f values file.
+#
+# Each entry shape:
+#   {
+#     "name": "my-appset-3a1f2",
+#     "projectName": "my-project",
+#     "goTemplate": false,
+#     "generatorSpec": [{"list": {"elements": [...]}}],
+#     "templateSpec": {"metadata": {"name": "..."}, "spec": {...}}
+#   }
+applicationSets: "[]"

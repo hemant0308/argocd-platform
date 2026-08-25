@@ -3,6 +3,7 @@ package com.argocd.platform.api.service.argocd;
 import com.argocd.platform.api.cache.event.PartitionChangedEvent;
 import com.argocd.platform.api.model.request.argocd.ArgoCDStatusRequest;
 import com.argocd.platform.api.repository.ApplicationRepository;
+import com.argocd.platform.api.repository.ApplicationSetRepository;
 import com.argocd.platform.api.repository.ClusterRepository;
 import com.argocd.platform.api.repository.ProjectRepository;
 import com.argocd.platform.api.service.PartitionService;
@@ -68,6 +69,7 @@ public class ArgoCDStatusService {
     private final ClusterRepository clusterRepository;
     private final ProjectRepository projectRepository;
     private final ApplicationRepository applicationRepository;
+    private final ApplicationSetRepository applicationSetRepository;
     private final PartitionService partitionService;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -112,8 +114,48 @@ public class ArgoCDStatusService {
             }
             case "application" -> processApplicationEvent(request);
             case "application-partition" -> processApplicationPartitionEvent(request);
+            case "applicationset-partition" -> processApplicationSetPartitionEvent(request);
             default -> log.warn("Unknown resourceType='{}' for application '{}'; status event ignored",
                     request.getResourceType(), request.getApplicationName());
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ApplicationSet-partition event routing
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Handles {@code on-applicationset-partition-synced} events from
+     * {@code applicationset-group-{N}-{cp}} Applications on the managed ArgoCD.
+     *
+     * <p>When the applicationset-registration chart syncs to a CP it means all
+     * user-defined ApplicationSets for that partition+CP are now present on the CP.
+     * This marks them ACTIVE — the same "CREATED confirmation" pattern used by
+     * clusters and projects.
+     *
+     * <p>Only acts on Synced+Healthy events; degraded/failed syncs are ignored.
+     */
+    private void processApplicationSetPartitionEvent(ArgoCDStatusRequest request) {
+        if (!"Synced".equals(request.getSyncStatus()) || !"Healthy".equals(request.getHealthStatus())) {
+            log.debug("applicationset-partition event ignored: not Synced+Healthy " +
+                      "(app='{}', sync={}, health={})",
+                    request.getApplicationName(), request.getSyncStatus(), request.getHealthStatus());
+            return;
+        }
+
+        int partitionNumber = parsePartitionNumber(request.getPartitionNumber());
+        String controlPlane = request.getControlPlane();
+
+        int activatedRows = applicationSetRepository.updateStatusByPartitionNumberAndControlPlaneName(
+                partitionNumber, controlPlane, ResourceStatus.ACTIVE.name());
+
+        if (activatedRows > 0) {
+            log.info("applicationset-partition sync (partition={}, cp='{}'): " +
+                     "marked {} applicationset(s) ACTIVE",
+                    partitionNumber, controlPlane, activatedRows);
+        } else {
+            log.debug("applicationset-partition sync (partition={}, cp='{}'): " +
+                      "no applicationsets to activate", partitionNumber, controlPlane);
         }
     }
 

@@ -9,6 +9,7 @@ import com.argocd.platform.api.model.request.ClusterReference;
 import com.argocd.platform.api.model.request.ProjectRequest;
 import com.argocd.platform.api.model.response.ProjectResponse;
 import com.argocd.platform.api.model.response.argocd.ProjectClusterItem;
+import com.argocd.platform.api.repository.ApplicationSetRepository;
 import com.argocd.platform.api.repository.ClusterRepository;
 import com.argocd.platform.api.repository.ProjectRepository;
 import com.argocd.platform.api.util.PartitionType;
@@ -24,6 +25,7 @@ import org.springframework.util.CollectionUtils;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -37,6 +39,7 @@ public class ProjectService {
 
     private final ProjectRepository projectRepository;
     private final ClusterRepository clusterRepository;
+    private final ApplicationSetRepository applicationSetRepository;
     private final PartitionService partitionService;
     private final PartitionProperties partitionProperties;
     private final ApplicationEventPublisher eventPublisher;
@@ -103,6 +106,18 @@ public class ProjectService {
         if (!clusterIds.isEmpty()) {
             projectRepository.deleteProjectClusters(id);
             projectRepository.saveProjectClusters(id, clusterIds);
+
+            // Cluster change alters the CP fan-out for all ApplicationSets in this project.
+            // Bump their partition generations so the plugin cache is evicted and ArgoCD
+            // re-renders the correct set of ApplicationSet objects on each CP within ~10 s.
+            Set<UUID> appSetPartitionIds =
+                    applicationSetRepository.findDistinctPartitionIdsByProjectId(id);
+            if (!appSetPartitionIds.isEmpty()) {
+                partitionService.bumpApplicationSetPartitionGenerations(appSetPartitionIds);
+                appSetPartitionIds.forEach(pid ->
+                        eventPublisher.publishEvent(
+                                new PartitionChangedEvent(this, pid, PartitionType.APPLICATION_SET)));
+            }
         }
 
         // Bump generation so Level 1 partition-list response carries the new value,

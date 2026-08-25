@@ -4,9 +4,11 @@ import com.argocd.platform.api.cache.PluginExecutor;
 import com.argocd.platform.api.exception.InvalidRequestException;
 import com.argocd.platform.api.model.request.argocd.PluginGeneratorRequest;
 import com.argocd.platform.api.model.response.argocd.ApplicationItem;
+import com.argocd.platform.api.model.response.argocd.ApplicationSetItem;
 import com.argocd.platform.api.model.response.argocd.ClusterItem;
 import com.argocd.platform.api.model.response.argocd.PluginGeneratorResponse;
 import com.argocd.platform.api.model.response.argocd.ProjectItem;
+import com.argocd.platform.api.repository.ApplicationSetRepository;
 import com.argocd.platform.api.repository.ArgoCDApplicationRepository;
 import com.argocd.platform.api.repository.ClusterRepository;
 import com.argocd.platform.api.repository.ControlPlaneRepository;
@@ -43,6 +45,11 @@ import java.util.stream.Collectors;
  *   <li>{@code application-groups} — applications in a global partition grouped by control
  *       plane (CP fan-out). Requires {@code partitionNumber}. Returns one entry per CP that
  *       has at least one application in the partition.</li>
+ *   <li>{@code applicationset-partitions} — all applicationset partitions (globally unique
+ *       partition_number). No extra params. One entry per partition.</li>
+ *   <li>{@code applicationset-groups} — applicationsets in a global partition filtered by
+ *       CP via project fan-out. Requires {@code partitionNumber}. Returns one entry per CP
+ *       that hosts ≥1 cluster belonging to each applicationset's project.</li>
  * </ul>
  *
  * <p><b>Architectural rule (permanent):</b> Control planes are stateless. The CP-to-resource
@@ -64,6 +71,7 @@ public class ArgoCDPluginService implements PluginExecutor {
     private final ProjectRepository projectRepository;
     private final ControlPlaneRepository controlPlaneRepository;
     private final ArgoCDApplicationRepository argoCDApplicationRepository;
+    private final ApplicationSetRepository applicationSetRepository;
 
     @Transactional(readOnly = true)
     public PluginGeneratorResponse execute(PluginGeneratorRequest request) {
@@ -74,16 +82,19 @@ public class ArgoCDPluginService implements PluginExecutor {
         String resource = params.getOrDefault("resource", "");
 
         List<Map<String, Object>> parameters = switch (resource) {
-            case "cluster-partitions"     -> clusterPartitions();
-            case "cluster-groups"         -> clusterGroups(params);
-            case "project-partitions"     -> projectPartitions();
-            case "project-groups"         -> projectGroups(params);
-            case "application-partitions" -> applicationPartitions();
-            case "application-groups"     -> applicationGroups(params);
+            case "cluster-partitions"        -> clusterPartitions();
+            case "cluster-groups"            -> clusterGroups(params);
+            case "project-partitions"        -> projectPartitions();
+            case "project-groups"            -> projectGroups(params);
+            case "application-partitions"    -> applicationPartitions();
+            case "application-groups"        -> applicationGroups(params);
+            case "applicationset-partitions" -> applicationSetPartitions();
+            case "applicationset-groups"     -> applicationSetGroups(params);
             default -> throw new InvalidRequestException(
                     "Unknown resource: '" + resource + "'. Supported values: " +
                     "cluster-partitions, cluster-groups, project-partitions, project-groups, " +
-                    "application-partitions, application-groups");
+                    "application-partitions, application-groups, " +
+                    "applicationset-partitions, applicationset-groups");
         };
 
         return PluginGeneratorResponse.builder()
@@ -324,6 +335,86 @@ public class ArgoCDPluginService implements PluginExecutor {
             m.put("partitionNumber", partitionNumber);
             m.put("controlPlane", cpName);
             m.put("applications", minimalApps);
+            m.put("generation", partitionGeneration);
+            result.add(m);
+        }
+        return result;
+    }
+
+    // =========================================================================
+    // resource: applicationset-partitions
+    // Returns one entry per globally-unique applicationset partition (Option A).
+    // No controlPlaneName field — CP association is derived at query time via
+    // project → project_clusters → clusters → control_planes.
+    // =========================================================================
+
+    private List<Map<String, Object>> applicationSetPartitions() {
+        return partitionService.findAllApplicationSetPartitions().stream()
+                .map(p -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("partitionNumber", p.getPartitionNumber());
+                    m.put("generation", p.getGeneration());
+                    m.put("applicationSetCount", p.getApplicationSetCount());
+                    return m;
+                })
+                .collect(Collectors.toList());
+    }
+
+    // =========================================================================
+    // resource: applicationset-groups
+    // Project-based CP fan-out: returns one entry per control plane that has ≥1
+    // cluster belonging to any applicationset's project in the given partition.
+    //
+    // Fan-out join path (mirrors projectGroups):
+    //   applicationsets → project_id → project_clusters → clusters → control_planes
+    //
+    // Required params: partitionNumber (int)
+    //
+    // Failover-safe: when a cluster moves CPs, clusters.control_plane_id updates —
+    // the next plugin poll automatically produces the correct CP fan-out entries.
+    // =========================================================================
+
+    private List<Map<String, Object>> applicationSetGroups(Map<String, String> params) {
+        int partitionNumber = getRequiredInt(params, "partitionNumber");
+
+        UUID partitionId = partitionService.findApplicationSetPartitionIdByNumber(partitionNumber)
+                .orElseThrow(() -> new InvalidRequestException(
+                        "No applicationset partition found with partitionNumber=" + partitionNumber));
+
+        long partitionGeneration =
+                partitionService.findApplicationSetPartitionGeneration(partitionId);
+
+        List<String> cpNames = controlPlaneRepository.findAll().stream()
+                .map(cp -> cp.getName())
+                .collect(Collectors.toList());
+
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (String cpName : cpNames) {
+            List<ApplicationSetItem> appSets =
+                    applicationSetRepository.findByPartitionIdAndControlPlaneName(
+                            partitionId, cpName);
+
+            if (appSets.isEmpty()) {
+                // No applicationsets for this CP — no entry emitted, no Application created.
+                continue;
+            }
+
+            List<Map<String, Object>> minimalAppSets = appSets.stream()
+                    .map(a -> {
+                        Map<String, Object> am = new LinkedHashMap<>();
+                        am.put("name", a.getName());
+                        am.put("projectName", a.getProjectName());
+                        am.put("goTemplate", a.isGoTemplate());
+                        am.put("generatorSpec", a.getGeneratorSpec());
+                        am.put("templateSpec", a.getTemplateSpec());
+                        return am;
+                    })
+                    .collect(Collectors.toList());
+
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("partitionNumber", partitionNumber);
+            m.put("controlPlane", cpName);
+            m.put("applicationSets", minimalAppSets);
             m.put("generation", partitionGeneration);
             result.add(m);
         }

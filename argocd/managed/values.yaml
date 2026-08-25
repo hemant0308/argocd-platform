@@ -42,10 +42,12 @@ requeueAfterSeconds:
   clusterPartitions: 10
   projectPartitions: 10
   applicationPartitions: 10
+  applicationSetPartitions: 10
   # Level 3 — group-discovery AppSets (charts/*-partition); safety-net only
   clusterGroups: 600
   projectGroups: 600
   applicationGroups: 600
+  applicationSetGroups: 600
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Control-plane ApplicationSet

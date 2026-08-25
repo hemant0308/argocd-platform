@@ -1,6 +1,7 @@
 package com.argocd.platform.api.service;
 
 import com.argocd.platform.api.model.response.argocd.ApplicationPartitionResponse;
+import com.argocd.platform.api.model.response.argocd.ApplicationSetPartitionResponse;
 import com.argocd.platform.api.model.response.argocd.ClusterPartitionResponse;
 import com.argocd.platform.api.model.response.argocd.ProjectPartitionResponse;
 import com.argocd.platform.api.repository.PartitionRepository;
@@ -101,6 +102,18 @@ public class PartitionService {
         return partitionRepository.resolvePartitionId(PartitionType.PROJECT, targetSize);
     }
 
+    /**
+     * Resolves (or creates) an applicationset partition (globally scoped).
+     * ApplicationSets are deployed to every CP that hosts a cluster belonging to
+     * the ApplicationSet's project — fan-out is derived at query time.
+     *
+     * @param targetSize max applicationsets per partition before a new one is created
+     * @return UUID of the assigned applicationset partition
+     */
+    public UUID resolveApplicationSetPartition(int targetSize) {
+        return partitionRepository.resolvePartitionId(PartitionType.APPLICATION_SET, targetSize);
+    }
+
     // =========================================================================
     // Read path — forward cache (number → UUID)
     // =========================================================================
@@ -141,6 +154,18 @@ public class PartitionService {
                 () -> partitionRepository.findProjectPartitionIdByNumber(partitionNumber));
     }
 
+    /**
+     * Resolves an applicationset partition UUID by its globally-unique partition number.
+     * Results are cached in-memory.
+     *
+     * @param partitionNumber globally-unique applicationset partition number
+     * @return partition UUID, or empty if not yet created
+     */
+    public Optional<UUID> findApplicationSetPartitionIdByNumber(int partitionNumber) {
+        return findByNumber(PartitionType.APPLICATION_SET, partitionNumber,
+                () -> partitionRepository.findApplicationSetPartitionIdByNumber(partitionNumber));
+    }
+
     // =========================================================================
     // Reverse lookup — used by cache invalidation listener
     // =========================================================================
@@ -160,6 +185,7 @@ public class PartitionService {
         if (cached != null) {
             return Optional.of(cached);
         }
+        // APPLICATION_SET delegated to its own table via findPartitionNumberById switch
         return partitionRepository.findPartitionNumberById(type, partitionId)
                 .map(number -> {
                     PartitionKey pk = new PartitionKey(type, number);
@@ -234,6 +260,32 @@ public class PartitionService {
         partitionRepository.bumpProjectPartitionGenerations(Set.of(partitionId));
     }
 
+    /**
+     * Atomically bumps the applicationset partition's {@code generation} counter and
+     * returns the new value. Must be called inside the same transaction as the
+     * triggering write so the generation change and the applicationset-state change
+     * are atomic.
+     */
+    public long bumpApplicationSetPartitionGeneration(UUID partitionId) {
+        return partitionRepository.bumpAndReturnApplicationSetPartitionGeneration(partitionId);
+    }
+
+    /**
+     * Returns the current generation of an applicationset partition without bumping it.
+     * Used by the plugin service to include {@code generation} in the
+     * {@code applicationset-groups} response.
+     */
+    public long findApplicationSetPartitionGeneration(UUID partitionId) {
+        return partitionRepository.findApplicationSetPartitionGeneration(partitionId);
+    }
+
+    /**
+     * Bumps generation on a set of applicationset partition IDs (batch).
+     */
+    public void bumpApplicationSetPartitionGenerations(Set<UUID> partitionIds) {
+        partitionRepository.bumpApplicationSetPartitionGenerations(partitionIds);
+    }
+
     // =========================================================================
     // List path — not cached in-memory (resource counts are dynamic)
     // =========================================================================
@@ -248,6 +300,10 @@ public class PartitionService {
 
     public List<ApplicationPartitionResponse> findAllApplicationPartitions() {
         return partitionRepository.findAllApplicationPartitions();
+    }
+
+    public List<ApplicationSetPartitionResponse> findAllApplicationSetPartitions() {
+        return partitionRepository.findAllApplicationSetPartitions();
     }
 
     // =========================================================================

@@ -1,0 +1,50 @@
+{{- /*
+  Creates one ArgoCD ApplicationSet per entry in .Values.applicationSets.
+
+  .Values.applicationSets is a JSON array string serialised by the inner
+  applicationset-partition ApplicationSet via {{ .applicationSets | toJson }}.
+
+  fromJsonArray (Helm built-in) correctly parses JSON arrays into a Go slice.
+
+  Inside the range:
+    .               = current applicationset item
+                      { name, projectName, goTemplate, generatorSpec, templateSpec }
+    .generatorSpec  = []interface{} — ArgoCD spec.generators array
+    .templateSpec   = map[string]interface{} — ArgoCD spec.template object
+    $.Values        = chart-level values { partitionNumber, controlPlane, applicationSets }
+
+  Spec passthrough:
+    .generatorSpec | toYaml and .templateSpec | toYaml serialise native Go data
+    structures to YAML. String values inside these structures (including ArgoCD
+    template tokens like {{cluster}} or {{ .cluster }}) are NOT re-evaluated by
+    Helm — they are data, not template expressions. Both ArgoCD standard syntax and
+    goTemplate syntax pass through untouched to ArgoCD for evaluation.
+
+  goTemplate:
+    spec.goTemplate is set from the per-item boolean. When true, ArgoCD evaluates
+    template variables as {{ .variable }} Go expressions. When false (default),
+    ArgoCD uses the standard {{variable}} syntax.
+*/ -}}
+{{- range fromJsonArray .Values.applicationSets }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: {{ .name }}
+  namespace: argocd
+  labels:
+    argocd-platform/resource-type: applicationset
+    argocd-platform/partition-number: "{{ $.Values.partitionNumber }}"
+    argocd-platform/control-plane: "{{ $.Values.controlPlane }}"
+    argocd-platform/project: {{ .projectName | quote }}
+  annotations:
+    notifications.argoproj.io/subscribe.on-sync-succeeded.platform-status: ""
+    notifications.argoproj.io/subscribe.on-sync-failed.platform-status: ""
+    notifications.argoproj.io/subscribe.on-health-degraded.platform-status: ""
+spec:
+  goTemplate: {{ .goTemplate }}
+  generators:
+{{ .generatorSpec | toYaml | indent 4 }}
+  template:
+{{ .templateSpec | toYaml | indent 4 }}
+{{- end }}

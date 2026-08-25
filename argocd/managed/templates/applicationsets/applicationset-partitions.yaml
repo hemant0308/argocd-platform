@@ -1,0 +1,55 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: applicationset-partitions
+  namespace: argocd
+
+spec:
+  generators:
+    - plugin:
+        configMapRef:
+          name: argocd-platform-plugin
+        input:
+          parameters:
+            resource: "applicationset-partitions"
+        requeueAfterSeconds: {{ .Values.requeueAfterSeconds.applicationSetPartitions }}
+
+  template:
+    metadata:
+      # Partition numbers are globally unique (Option A) — no CP suffix needed.
+      name: 'applicationset-partition-{{`{{partitionNumber}}`}}'
+      annotations:
+        argocd-platform/generation: '{{`{{generation}}`}}'
+        argocd-platform/applicationset-count: '{{`{{applicationSetCount}}`}}'
+
+    spec:
+      project: default
+
+      source:
+        repoURL: {{ .Values.git.repoURL | quote }}
+        targetRevision: {{ .Values.git.targetRevision | quote }}
+        path: charts/applicationset-partition
+        helm:
+          valuesObject:
+            # Partition identity — passed through to the inner ApplicationSet
+            # so the applicationset-groups plugin knows which partition to query.
+            partitionNumber: '{{`{{partitionNumber}}`}}'
+            # Generation bumps whenever partition membership changes in the DB,
+            # forcing this Application to re-sync and re-render the inner AppSet.
+            generation: '{{`{{generation}}`}}'
+            # Poll interval for the inner applicationset-groups ApplicationSet.
+            # Controlled centrally from argocd/managed values.
+            requeueAfterSeconds: {{ .Values.requeueAfterSeconds.applicationSetGroups }}
+
+      # Deploy to the managed ArgoCD cluster itself — the chart renders an
+      # ApplicationSet resource that lives on the managed control plane.
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: argocd
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

@@ -1,0 +1,15 @@
+apiVersion: v2
+name: applicationset-registration
+description: >
+  Creates ArgoCD ApplicationSet resources on a target control plane.
+  One ApplicationSet is created per entry in the applicationSets list.
+  Each ApplicationSet is constructed from a user-provided generatorSpec (list of
+  ArgoCD generator objects) and templateSpec (ArgoCD application template object).
+  The generatorSpec and templateSpec are serialised from JSONB and emitted via
+  toYaml — Helm does not re-evaluate Go template tokens inside data values, so both
+  ArgoCD standard syntax ({{cluster}}) and goTemplate syntax ({{ .cluster }}) pass
+  through untouched to ArgoCD for evaluation.
+  Deployed to the target control plane cluster by an Application generated from
+  charts/applicationset-partition.
+type: application
+version: 1.0.0

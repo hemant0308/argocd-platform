@@ -16,6 +16,7 @@ import org.springframework.context.annotation.Configuration;
  *     project-target-size: 100
  *     cluster-target-size: 100
  *     application-target-size: 100
+ *     application-set-target-size: 100
  * </pre>
  */
 @Configuration
@@ -31,4 +32,7 @@ public class PartitionProperties {
 
     /** Maximum number of applications per partition before a new one is created. */
     private int applicationTargetSize = 100;
+
+    /** Maximum number of user-defined ApplicationSets per partition before a new one is created. */
+    private int applicationSetTargetSize = 100;
 }

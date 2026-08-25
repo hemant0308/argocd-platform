@@ -8,5 +8,6 @@ package com.argocd.platform.api.util;
 public enum PartitionType {
     PROJECT,
     CLUSTER,
-    APPLICATION
+    APPLICATION,
+    APPLICATION_SET
 }

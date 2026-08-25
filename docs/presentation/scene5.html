@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scene 5 — Platform Architecture</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      background:#080B12; overflow:hidden;
+      width:100vw; height:100vh;
+      font-family:'Inter',-apple-system,sans-serif;
+      cursor:pointer; user-select:none;
+    }
+    canvas { display:block; position:absolute; top:0; left:0; pointer-events:none; }
+
+    #narrative {
+      position:absolute; inset:0;
+      display:flex; flex-direction:column;
+      align-items:center; justify-content:center;
+      pointer-events:none; opacity:0; transition:opacity 1.2s ease;
+    }
+    #narrative.visible { opacity:1; }
+    #nar-title {
+      color:#fff; font-size:clamp(22px,3.2vw,52px);
+      font-weight:700; letter-spacing:-0.025em;
+      text-align:center; line-height:1.15; max-width:820px; padding:0 40px;
+    }
+    #nar-sub {
+      margin-top:14px; color:rgba(255,255,255,0.42);
+      font-size:clamp(13px,1.6vw,20px); text-align:center; padding:0 40px;
+    }
+
+    #scene-label {
+      position:absolute; top:28px; left:36px;
+      color:rgba(255,255,255,0.18); font-size:11px;
+      letter-spacing:0.12em; text-transform:uppercase; font-weight:500; pointer-events:none;
+    }
+    #step-label {
+      position:absolute; top:28px; right:36px;
+      color:rgba(255,255,255,0.30); font-size:11.5px; letter-spacing:0.03em;
+      font-weight:500; pointer-events:none; text-align:right; max-width:380px;
+      transition:opacity 0.4s;
+    }
+
+    #legend {
+      position:absolute; bottom:68px; left:32px;
+      display:flex; flex-direction:column; gap:7px;
+      opacity:0; transition:opacity 0.8s ease; pointer-events:none;
+    }
+    .leg-row { display:flex; align-items:center; gap:8px; }
+    .leg-line { width:28px; height:3px; border-radius:2px; display:block; }
+    .leg-text { font-size:11px; color:rgba(255,255,255,0.45); font-family:'Inter',sans-serif; letter-spacing:0.04em; }
+
+    #progress {
+      position:absolute; bottom:30px; left:50%; transform:translateX(-50%);
+      display:flex; gap:7px; align-items:center; pointer-events:none;
+    }
+    .dot { width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,0.15); transition:all 0.4s ease; }
+    .dot.active { background:rgba(255,255,255,0.75); width:18px; border-radius:3px; }
+
+    #hint {
+      position:absolute; bottom:52px; left:50%; transform:translateX(-50%);
+      color:rgba(255,255,255,0.18); font-size:11px; letter-spacing:0.10em;
+      text-transform:uppercase; pointer-events:none; white-space:nowrap; transition:opacity 0.5s;
+    }
+    #hint.hidden { opacity:0; }
+  </style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+<div id="narrative"><h1 id="nar-title"></h1><p id="nar-sub"></p></div>
+<div id="scene-label">Scene 5 &nbsp;/&nbsp; Platform Architecture</div>
+<div id="step-label"></div>
+
+<div id="legend">
+  <div class="leg-row">
+    <span class="leg-line" style="background:#C084FC;box-shadow:0 0 6px #C084FC;"></span>
+    <span class="leg-text">Platform Service ↔ PostgreSQL</span>
+  </div>
+  <div class="leg-row">
+    <span class="leg-line" style="background:#60A5FA;box-shadow:0 0 6px #60A5FA;"></span>
+    <span class="leg-text">ApplicationSets → Platform Service (poll)</span>
+  </div>
+  <div class="leg-row">
+    <span class="leg-line" style="background:#4ADE80;box-shadow:0 0 6px #4ADE80;"></span>
+    <span class="leg-text">Platform Service → ApplicationSets (response)</span>
+  </div>
+  <div class="leg-row">
+    <span class="leg-line" style="background:#A78BFA;box-shadow:0 0 6px #A78BFA;"></span>
+    <span class="leg-text">Managed ArgoCD → Control Planes (create apps)</span>
+  </div>
+  <div class="leg-row">
+    <span class="leg-line" style="background:#2DD4BF;box-shadow:0 0 6px #2DD4BF;"></span>
+    <span class="leg-text">Control Planes → User Clusters (reconcile)</span>
+  </div>
+</div>
+
+<div id="hint">Click or press Space to continue</div>
+<div id="progress"></div>
+
+<script>
+'use strict';
+
+// ─── Canvas ────────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+let W = 0, H = 0;
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W*dpr; canvas.height = H*dpr;
+  canvas.style.width = W+'px'; canvas.style.height = H+'px';
+  ctx.scale(dpr, dpr);
+}
+resize();
+window.addEventListener('resize', resize);
+
+// ─── ArgoCD icon — pre-rasterised once, blitted per frame ─────────────────────
+const _argoImg = new Image();
+let   _argoOC  = null;
+_argoImg.onload = () => {
+  const oc = document.createElement('canvas');
+  oc.width = 64; oc.height = 64;
+  oc.getContext('2d').drawImage(_argoImg, 0, 0, 64, 64);
+  _argoOC = oc;
+};
+_argoImg.src = 'argocd-icon.svg';
+
+// Draw [icon  text] as a centred unit at (cx, cy)
+function drawArgoLabel(cx, cy, text, font, color, op, iconSz) {
+  if (iconSz === undefined) iconSz = 15;
+  ctx.save();
+  ctx.font = font;
+  const tw     = ctx.measureText(text).width;
+  const gap    = 5;
+  const totalW = iconSz + gap + tw;
+  const ix     = cx - totalW / 2;
+  ctx.globalAlpha  = op;
+  ctx.shadowBlur   = 0;
+  if (_argoOC) ctx.drawImage(_argoOC, ix, cy - iconSz / 2, iconSz, iconSz);
+  ctx.fillStyle    = color;
+  ctx.textAlign    = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, ix + iconSz + gap, cy);
+  ctx.restore();
+}
+
+// Draw [DB-cylinder  text] as a centred unit at (cx, cy)
+function drawDbLabel(cx, cy, text, font, color, op, iconSz) {
+  if (iconSz === undefined) iconSz = 15;
+  ctx.save();
+  ctx.font = font;
+  const tw     = ctx.measureText(text).width;
+  const gap    = 5;
+  const totalW = iconSz + gap + tw;
+  const ix     = cx - totalW / 2;   // left edge of icon area
+  const icx    = ix + iconSz / 2;   // horizontal centre of cylinder
+  const icy    = cy;
+
+  // Cylinder geometry
+  const erx  = iconSz * 0.44;
+  const ery  = iconSz * 0.20;
+  const topY = icy - iconSz * 0.36;
+  const botY = icy + iconSz * 0.36;
+  const midY = (topY + botY) / 2;
+
+  ctx.shadowBlur  = 0;
+  ctx.strokeStyle = color;
+  ctx.lineWidth   = 1.3;
+
+  // Side lines
+  ctx.globalAlpha = op;
+  ctx.beginPath();
+  ctx.moveTo(icx - erx, topY); ctx.lineTo(icx - erx, botY);
+  ctx.moveTo(icx + erx, topY); ctx.lineTo(icx + erx, botY);
+  ctx.stroke();
+
+  // Bottom ellipse
+  ctx.beginPath();
+  ctx.ellipse(icx, botY, erx, ery, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Middle stripe — top-half arc only (data-layer hint)
+  ctx.globalAlpha = op * 0.45;
+  ctx.beginPath();
+  ctx.ellipse(icx, midY, erx, ery, 0, Math.PI, 0, true);
+  ctx.stroke();
+
+  // Top cap ellipse — drawn last so it overlaps side lines cleanly
+  ctx.globalAlpha = op;
+  ctx.beginPath();
+  ctx.ellipse(icx, topY, erx, ery, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Text
+  ctx.fillStyle    = color;
+  ctx.textAlign    = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, ix + iconSz + gap, cy);
+  ctx.restore();
+}
+
+// ─── Managed ArgoCD box bounds ────────────────────────────────────────────────
+const BOX = { x1:0.08, y1:0.30, x2:0.92, y2:0.70 };
+
+// ─── Nodes ────────────────────────────────────────────────────────────────────
+const NODES = {
+  postgres: { rx:0.50, ry:0.09,  type:'postgres',  label:'PostgreSQL',       sub:'Source of truth',                step:1 },
+  platform: { rx:0.50, ry:0.235, type:'platform', label:'Platform Service', sub:'Spring Boot — plugin generator', step:1 },
+  appsets:  { rx:0.50, ry:0.475, type:'appsets',   label:'ApplicationSets',  sub:'app · cluster · project partitions', step:2 },
+  cp1: { rx:0.22, ry:0.79, type:'cp', label:'CP-1', step:4 },
+  cp2: { rx:0.50, ry:0.79, type:'cp', label:'CP-2', step:4 },
+  cp3: { rx:0.78, ry:0.79, type:'cp', label:'CP-3', step:4 },
+  uc1: { rx:0.22, ry:0.89, type:'cluster', step:5 },
+  uc2: { rx:0.50, ry:0.89, type:'cluster', step:5 },
+  uc3: { rx:0.78, ry:0.89, type:'cluster', step:5 },
+};
+
+const opacity = {};
+Object.keys(NODES).forEach(k => opacity[k] = 0);
+
+// ─── Connections ──────────────────────────────────────────────────────────────
+const CONNS = [
+  { from:'platform', to:'postgres', step:1 },
+  { from:'postgres', to:'platform', step:1 },
+  { from:'appsets',  to:'platform', step:2 },
+  { from:'platform', to:'appsets',  step:2 },
+  { from:'appsets', to:'cp1', step:4 },
+  { from:'appsets', to:'cp2', step:4 },
+  { from:'appsets', to:'cp3', step:4 },
+  { from:'cp1', to:'uc1', step:5 },
+  { from:'cp2', to:'uc2', step:5 },
+  { from:'cp3', to:'uc3', step:5 },
+];
+
+// ─── State ────────────────────────────────────────────────────────────────────
+let step        = 0;
+const MAX_STEPS = 7; // steps 0–6
+let particles   = [];
+let frozen      = false;
+let t           = 0;
+let pulse       = 0;
+
+// ─── Particle ─────────────────────────────────────────────────────────────────
+class Particle {
+  constructor(from, to, col) {
+    this.from = from; this.to = to; this.col = col;
+    this.p    = 0;
+    this.spd  = 0.007 + Math.random() * 0.004;
+    this.r    = 2.0 + Math.random() * 1.4;
+    this.bow  = { x:(Math.random()-.5)*.07, y:(Math.random()-.5)*.05 };
+    this.alive = true;
+  }
+  pos() {
+    const f=NODES[this.from], t2=NODES[this.to];
+    const fx=f.rx*W, fy=f.ry*H, tx=t2.rx*W, ty=t2.ry*H;
+    const cx=(fx+tx)/2+this.bow.x*Math.min(W,H);
+    const cy=(fy+ty)/2+this.bow.y*Math.min(W,H);
+    const u=1-this.p;
+    return { x:u*u*fx+2*u*this.p*cx+this.p*this.p*tx,
+             y:u*u*fy+2*u*this.p*cy+this.p*this.p*ty };
+  }
+  update() { this.p+=this.spd; if(this.p>=1) this.alive=false; }
+  draw() {
+    const {x,y}=this.pos();
+    const alpha=Math.sin(this.p*Math.PI);
+    ctx.save();
+    ctx.globalAlpha=alpha*0.35;
+    ctx.fillStyle=this.col; ctx.shadowColor=this.col; ctx.shadowBlur=14;
+    ctx.beginPath(); ctx.arc(x,y,this.r*2.5,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=alpha*0.92; ctx.shadowBlur=4;
+    ctx.beginPath(); ctx.arc(x,y,this.r,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ─── Particle colour ──────────────────────────────────────────────────────────
+function pColor(from, to) {
+  if (from==='platform' && to==='postgres') return '#C084FC';
+  if (from==='postgres' && to==='platform') return '#C084FC';
+  if (from==='appsets'  && to==='platform') return '#60A5FA';
+  if (from==='platform' && to==='appsets')  return '#4ADE80';
+  if (from==='appsets'  && to.startsWith('cp'))  return '#A78BFA';
+  if (from.startsWith('cp') && to.startsWith('uc')) return '#2DD4BF';
+  return '#60A5FA';
+}
+
+// ─── Spawn probabilities ──────────────────────────────────────────────────────
+function spawnProbFor(c) {
+  if (frozen || step === 0 || step >= 6) return 0;
+  const isDb        = (c.from==='platform'&&c.to==='postgres')||(c.from==='postgres'&&c.to==='platform');
+  const isPoll      = c.from==='appsets'  && c.to==='platform';
+  const isResp      = c.from==='platform' && c.to==='appsets';
+  const isCreate    = c.from==='appsets'  && c.to.startsWith('cp');
+  const isReconcile = c.from.startsWith('cp') && c.to.startsWith('uc');
+
+  if (step===1) { return isDb   ? 0.025 : 0; }
+  if (step===2) {
+    if (isPoll) return 0.018;
+    if (isDb)   return 0.012;
+    return 0;
+  }
+  if (step===3) {
+    if (isPoll) return 0.028;
+    if (isResp) return 0.032;
+    if (isDb)   return 0.014;
+    return 0;
+  }
+  if (step===4) {
+    if (isCreate) return 0.030;
+    if (isPoll)   return 0.016;
+    if (isResp)   return 0.016;
+    if (isDb)     return 0.010;
+    return 0;
+  }
+  if (step===5) {
+    if (isReconcile) return 0.024;
+    if (isCreate)    return 0.009;
+    if (isPoll)      return 0.012;
+    if (isResp)      return 0.012;
+    if (isDb)        return 0.008;
+    return 0;
+  }
+  return 0;
+}
+
+function maybeSpawn() {
+  CONNS.forEach(c => {
+    if (c.step > step) return;
+    const fo=opacity[c.from]||0, to=opacity[c.to]||0;
+    if (fo<0.35||to<0.35) return;
+    const prob = spawnProbFor(c);
+    if (prob && Math.random()<prob)
+      particles.push(new Particle(c.from, c.to, pColor(c.from, c.to)));
+  });
+}
+
+// ─── Opacity targets ──────────────────────────────────────────────────────────
+function opTarget(key) {
+  const n=NODES[key];
+  if (n.step > step) return 0;
+  if (step >= 6) return 0.12;
+  return 1;
+}
+function updateOpacity() {
+  Object.keys(NODES).forEach(k => { opacity[k]+=(opTarget(k)-opacity[k])*0.028; });
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function rr(x,y,w,h,r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+  ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y);
+  ctx.closePath();
+}
+
+function drawPill(text, x, y, col, alpha) {
+  if (alpha < 0.02) return;
+  ctx.save();
+  ctx.font = '500 10.5px "Courier New",Courier,monospace';
+  const tw = ctx.measureText(text).width;
+  const pw = tw + 18, ph = 22;
+  ctx.globalAlpha = alpha * 0.90;
+  ctx.fillStyle = 'rgba(6,10,20,0.92)';
+  rr(x - pw/2, y - ph/2, pw, ph, 5); ctx.fill();
+  ctx.strokeStyle = `${col}66`; ctx.lineWidth = 1;
+  rr(x - pw/2, y - ph/2, pw, ph, 5); ctx.stroke();
+  ctx.fillStyle = col;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
+// ─── Background ───────────────────────────────────────────────────────────────
+function drawBg() {
+  ctx.fillStyle='#080B12'; ctx.fillRect(0,0,W,H);
+  const gx=0.50*W, gy=0.50*H, gr=Math.min(W,H)*0.55;
+  const g=ctx.createRadialGradient(gx,gy,0,gx,gy,gr);
+  g.addColorStop(0,'rgba(5,18,45,0.12)');
+  g.addColorStop(0.5,'rgba(3,10,28,0.05)');
+  g.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+}
+
+// ─── Managed ArgoCD box ───────────────────────────────────────────────────────
+function drawManagedArgoBox() {
+  const bx=BOX.x1*W, by=BOX.y1*H;
+  const bw=(BOX.x2-BOX.x1)*W, bh=(BOX.y2-BOX.y1)*H;
+  const hdrH = 34;
+  const intOp = opacity['appsets'] || 0;
+  if (intOp < 0.01) return;
+  ctx.save();
+
+  // Body fill
+  ctx.globalAlpha = intOp * 0.028;
+  ctx.fillStyle = '#3B82F6';
+  rr(bx,by,bw,bh,18); ctx.fill();
+
+  // Header band
+  ctx.globalAlpha = intOp * 0.11;
+  ctx.fillStyle = '#1D4ED8';
+  ctx.beginPath();
+  ctx.moveTo(bx+18, by);
+  ctx.lineTo(bx+bw-18, by);
+  ctx.quadraticCurveTo(bx+bw, by, bx+bw, by+18);
+  ctx.lineTo(bx+bw, by+hdrH);
+  ctx.lineTo(bx, by+hdrH);
+  ctx.lineTo(bx, by+18);
+  ctx.quadraticCurveTo(bx, by, bx+18, by);
+  ctx.closePath();
+  ctx.fill();
+
+  // Separator line
+  ctx.globalAlpha = intOp * 0.20;
+  ctx.strokeStyle = 'rgba(96,165,250,0.5)'; ctx.lineWidth = 1;
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(bx+1, by+hdrH); ctx.lineTo(bx+bw-1, by+hdrH);
+  ctx.stroke();
+
+  // Dashed border
+  ctx.globalAlpha = intOp * 0.32;
+  ctx.strokeStyle = 'rgba(96,165,250,0.60)'; ctx.lineWidth = 1.5;
+  ctx.setLineDash([8,12]);
+  rr(bx,by,bw,bh,18); ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.restore();
+
+  // Header label — ArgoCD icon + text centred as a unit
+  drawArgoLabel(bx+bw/2, by+hdrH/2, 'Managed ArgoCD', '700 14px Inter,sans-serif', '#93C5FD', intOp*0.80, 15);
+}
+
+// ─── Connection lines ─────────────────────────────────────────────────────────
+function drawLines() {
+  const drawn = new Set();
+  CONNS.forEach(c => {
+    if (c.step > step) return;
+    const key = [c.from, c.to].sort().join('|');
+    if (drawn.has(key)) return; drawn.add(key);
+    const fo = opacity[c.from]||0, to2 = opacity[c.to]||0;
+    const lo = Math.min(fo, to2); if (lo < 0.04) return;
+    ctx.save();
+    ctx.globalAlpha = lo * 0.20;
+    ctx.strokeStyle = 'rgba(80,140,210,0.5)';
+    ctx.lineWidth = 1; ctx.setLineDash([4,10]);
+    ctx.lineDashOffset = -(t * 0.26);
+    ctx.beginPath();
+    ctx.moveTo(NODES[c.from].rx*W, NODES[c.from].ry*H);
+    ctx.lineTo(NODES[c.to].rx*W,   NODES[c.to].ry*H);
+    ctx.stroke(); ctx.setLineDash([]);
+    ctx.restore();
+  });
+}
+
+// ─── Poll annotation pill ─────────────────────────────────────────────────────
+function drawPollLabel() {
+  if (step < 3) return;
+  const ax = NODES.appsets.rx  * W, ay = NODES.appsets.ry  * H;
+  const px = NODES.platform.rx * W, py = NODES.platform.ry * H;
+  const mx = (ax + px) / 2 + W * 0.085;
+  const my = (ay + py) / 2 - 10;
+  const alpha = Math.min(opacity.appsets, opacity.platform) * (step === 3 ? 1 : 0.50);
+  if (alpha > 0.02)
+    drawPill('POST  /api/v1/getparams.execute', mx, my, '#60A5FA', alpha);
+}
+
+// ─── Node sizes ───────────────────────────────────────────────────────────────
+function sz(type) {
+  return {
+    platform:[172,58],
+    postgres:[148,50],
+    appsets: [190,70],
+    cp:      [138,56],
+    cluster: [120,48],
+  }[type] || [140,52];
+}
+
+// ─── Node draw functions ──────────────────────────────────────────────────────
+function drawPlatform(x, y, op) {
+  const [w,h] = sz('platform'), px=x-w/2, py=y-h/2;
+  const bl = 16 + Math.sin(pulse*0.7)*4;
+  ctx.save(); ctx.globalAlpha = op;
+  ctx.shadowColor = 'rgba(74,222,128,0.45)'; ctx.shadowBlur = bl;
+  ctx.fillStyle = 'rgba(4,18,12,0.97)'; rr(px,py,w,h,10); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = 'rgba(74,222,128,0.72)'; ctx.lineWidth = 1.5;
+  rr(px,py,w,h,10); ctx.stroke();
+  ctx.fillStyle = '#6EE7B7'; ctx.font = '600 13px Inter,sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('Platform Service', x, y - 7);
+  ctx.fillStyle = 'rgba(110,231,183,0.48)'; ctx.font = '500 10px Inter,sans-serif';
+  ctx.fillText('Spring Boot — plugin generator', x, y + 7);
+  ctx.restore();
+}
+
+function drawPostgres(x, y, op) {
+  const [w,h] = sz('postgres'), px=x-w/2, py=y-h/2;
+  const bl = 12 + Math.sin(pulse*0.5)*3;
+  ctx.save(); ctx.globalAlpha = op;
+  ctx.shadowColor = 'rgba(192,132,252,0.42)'; ctx.shadowBlur = bl;
+  ctx.fillStyle = 'rgba(12,6,24,0.97)'; rr(px,py,w,h,10); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = 'rgba(192,132,252,0.70)'; ctx.lineWidth = 1.5;
+  rr(px,py,w,h,10); ctx.stroke();
+  ctx.fillStyle = 'rgba(233,213,255,0.45)'; ctx.font = '500 10px Inter,sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('Source of truth', x, y + 7);
+  ctx.restore();
+  // Main label with DB cylinder icon — drawn after restore so shadow is clean
+  drawDbLabel(x, y - 7, 'PostgreSQL', '600 13px Inter,sans-serif', '#E9D5FF', op, 14);
+}
+
+function drawAppSets(x, y, op) {
+  const [w,h] = sz('appsets'), px=x-w/2, py=y-h/2;
+  const bl = 20 + Math.sin(pulse*0.8)*6;
+  ctx.save(); ctx.globalAlpha = op;
+  ctx.shadowColor = 'rgba(167,139,250,0.55)'; ctx.shadowBlur = bl;
+  ctx.fillStyle = 'rgba(14,8,32,0.97)'; rr(px,py,w,h,14); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = 'rgba(139,92,246,0.80)'; ctx.lineWidth = 2;
+  rr(px,py,w,h,14); ctx.stroke();
+  ctx.fillStyle = '#C4B5FD'; ctx.font = '700 14px Inter,sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('ApplicationSets', x, y - 9);
+  ctx.fillStyle = 'rgba(196,181,253,0.50)'; ctx.font = '500 10px Inter,sans-serif';
+  ctx.fillText('app · cluster · project partitions', x, y + 8);
+  ctx.restore();
+}
+
+function drawCP(x, y, op, label) {
+  const [w,h] = sz('cp'), px=x-w/2, py=y-h/2;
+  const bl = 14 + Math.sin(pulse*0.65)*4;
+  ctx.save(); ctx.globalAlpha = op;
+  ctx.shadowColor = 'rgba(56,189,248,0.45)'; ctx.shadowBlur = bl;
+  ctx.fillStyle = 'rgba(4,14,28,0.97)'; rr(px,py,w,h,10); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = 'rgba(56,189,248,0.68)'; ctx.lineWidth = 1.5;
+  rr(px,py,w,h,10); ctx.stroke();
+  // Sub-label
+  ctx.fillStyle = 'rgba(125,211,252,0.45)'; ctx.font = '500 10.5px Inter,sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('ArgoCD', x, y + 8);
+  ctx.restore();
+  // Main label with ArgoCD icon — drawn after restore so shadow is clean
+  drawArgoLabel(x, y - 7, label, '700 14px Inter,sans-serif', '#7DD3FC', op, 13);
+}
+
+function drawCluster(x, y, op) {
+  const [w,h] = sz('cluster'), px=x-w/2, py=y-h/2;
+  ctx.save(); ctx.globalAlpha = op;
+  ctx.shadowColor = 'rgba(45,212,191,0.38)'; ctx.shadowBlur = 12;
+  ctx.fillStyle = 'rgba(4,14,18,0.97)'; rr(px,py,w,h,9); ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = 'rgba(45,212,191,0.60)'; ctx.lineWidth = 1;
+  rr(px,py,w,h,9); ctx.stroke();
+  ctx.fillStyle = 'rgba(153,246,228,0.85)'; ctx.font = '500 11px Inter,sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('User Cluster', x, py+15);
+  const nd=3, sp2=11, sx2=x-((nd-1)*sp2)/2, dy=py+h-13;
+  for (let i = 0; i < nd; i++) {
+    ctx.fillStyle = 'rgba(45,212,191,0.70)';
+    ctx.shadowColor = 'rgba(45,212,191,0.4)'; ctx.shadowBlur = 3;
+    ctx.beginPath(); ctx.arc(sx2+i*sp2, dy, 2.8, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawNodes() {
+  Object.entries(NODES).forEach(([k, n]) => {
+    const op = opacity[k]; if (op < 0.01) return;
+    const x = n.rx*W, y = n.ry*H;
+    switch (n.type) {
+      case 'platform': drawPlatform(x,y,op); break;
+      case 'postgres': drawPostgres(x,y,op); break;
+      case 'appsets':  drawAppSets(x,y,op);  break;
+      case 'cp':       drawCP(x,y,op,n.label); break;
+      case 'cluster':  drawCluster(x,y,op);  break;
+    }
+  });
+}
+
+// ─── Step labels ──────────────────────────────────────────────────────────────
+const LABELS = [
+  'How the Platform Works — one entry point for everything',
+  'User-owned state lives in PostgreSQL: clusters, projects, applications',
+  'Managed ArgoCD has ApplicationSets — each polls the Platform Service',
+  'Platform Service responds with parameter sets — one app per entry',
+  'Based on the response, Managed ArgoCD creates Applications on Control Planes',
+  'Control Planes reconcile user applications to their destination clusters',
+  '',
+];
+
+const stepLabelEl = document.getElementById('step-label');
+function updateStepLabel() {
+  stepLabelEl.textContent = step < 6 ? LABELS[step] : '';
+}
+
+// ─── Narrative & Legend ───────────────────────────────────────────────────────
+const narrativeEl = document.getElementById('narrative');
+const narTitle    = document.getElementById('nar-title');
+const narSub      = document.getElementById('nar-sub');
+const legendEl    = document.getElementById('legend');
+
+function updateNarrative() {
+  if (step === 6) {
+    narTitle.textContent = 'Platform Service is the source of truth.';
+    narSub.textContent   = 'Managed ArgoCD orchestrates. Control Planes execute.';
+    narrativeEl.classList.add('visible');
+  } else {
+    narrativeEl.classList.remove('visible');
+  }
+}
+function updateLegend() {
+  legendEl.style.opacity = (step >= 2 && step <= 5) ? '1' : '0';
+}
+
+// ─── Progress dots ────────────────────────────────────────────────────────────
+const progressEl = document.getElementById('progress');
+for (let i = 0; i < MAX_STEPS; i++) {
+  const d = document.createElement('div');
+  d.className = 'dot'; d.id = 'dot'+i; progressEl.appendChild(d);
+}
+function updateDots() {
+  for (let i = 0; i < MAX_STEPS; i++)
+    document.getElementById('dot'+i).className = 'dot' + (i === step ? ' active' : '');
+}
+
+// ─── Step advance ─────────────────────────────────────────────────────────────
+const hintEl = document.getElementById('hint');
+let hintTimer;
+function advance() {
+  if (step >= MAX_STEPS-1) return;
+  step++;
+  if (step >= 6) { frozen = true; particles = []; }
+  updateDots(); updateNarrative(); updateLegend(); updateStepLabel();
+  hintEl.classList.remove('hidden');
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => hintEl.classList.add('hidden'), 3000);
+}
+document.addEventListener('click', advance);
+document.addEventListener('keydown', e => {
+  if (e.code==='Space' || e.code==='ArrowRight') { e.preventDefault(); advance(); }
+  if (e.code==='ArrowLeft' && step > 0) {
+    step--;
+    frozen = step >= 6;
+    if (!frozen) particles = [];
+    updateDots(); updateNarrative(); updateLegend(); updateStepLabel();
+  }
+});
+
+// ─── Main loop ────────────────────────────────────────────────────────────────
+function loop() {
+  requestAnimationFrame(loop);
+  t++; pulse += 0.038;
+  updateOpacity();
+  maybeSpawn();
+  particles = particles.filter(p => { p.update(); return p.alive; });
+  drawBg();
+  drawManagedArgoBox();
+  drawLines();
+  particles.forEach(p => p.draw());
+  drawNodes();
+  drawPollLabel();
+}
+
+updateDots(); updateNarrative(); updateLegend(); updateStepLabel();
+setTimeout(() => hintEl.classList.add('hidden'), 4000);
+loop();
+</script>
+</body>
+</html>

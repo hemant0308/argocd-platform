@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+    http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.28.xsd">
+
+    <!-- =========================================================
+         User-defined ApplicationSets — §32.17
+
+         Architectural notes:
+           - applicationset_partitions mirrors application_partitions:
+             globally unique partition_number, no control_plane_id.
+           - applicationsets belong to a project, not a cluster.
+             CP fan-out is derived at query time via:
+               applicationsets → projects → project_clusters → clusters → control_planes
+             The same pattern used for project-groups.
+           - name is globally unique (hash suffix appended by service,
+             same as applications). No composite project+name key needed.
+           - generator_spec is a JSONB array matching spec.generators[].
+             template_spec is a JSONB object matching spec.template.
+             go_template controls spec.goTemplate in the rendered AppSet.
+
+         Control planes are stateless: no FK to control_planes here.
+         ========================================================= -->
+
+    <!-- ===================== applicationset_partitions ===================== -->
+
+    <changeSet id="v1.0.15-create-applicationset-partitions" author="argocd-platform">
+        <createTable tableName="applicationset_partitions"
+                     remarks="Stable reconciliation partitions for user-defined ApplicationSets">
+            <column name="id" type="UUID" defaultValueComputed="uuid_generate_v4()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <column name="partition_number" type="INTEGER">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="status" type="VARCHAR(50)" defaultValue="ACTIVE">
+                <constraints nullable="false"/>
+            </column>
+            <column name="generation" type="BIGINT" defaultValueNumeric="0">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+        </createTable>
+
+        <createIndex indexName="idx_applicationset_partitions_status"
+                     tableName="applicationset_partitions">
+            <column name="status"/>
+        </createIndex>
+
+        <rollback>
+            <dropTable tableName="applicationset_partitions"/>
+        </rollback>
+    </changeSet>
+
+    <!-- ===================== applicationsets ===================== -->
+
+    <changeSet id="v1.0.15-create-applicationsets" author="argocd-platform">
+        <createTable tableName="applicationsets"
+                     remarks="User-defined ArgoCD ApplicationSets managed by the platform">
+            <column name="id" type="UUID" defaultValueComputed="uuid_generate_v4()">
+                <constraints primaryKey="true" nullable="false"/>
+            </column>
+            <!-- Globally unique: service appends a 5-hex-char hash suffix at creation. -->
+            <column name="name" type="VARCHAR(255)">
+                <constraints nullable="false" unique="true"/>
+            </column>
+            <column name="project_id" type="UUID">
+                <constraints nullable="false"
+                             foreignKeyName="fk_applicationsets_project"
+                             referencedTableName="projects"
+                             referencedColumnNames="id"/>
+            </column>
+            <column name="applicationset_partition_id" type="UUID">
+                <constraints nullable="false"
+                             foreignKeyName="fk_applicationsets_partition"
+                             referencedTableName="applicationset_partitions"
+                             referencedColumnNames="id"/>
+            </column>
+            <!-- JSON array matching ArgoCD ApplicationSet spec.generators[] -->
+            <column name="generator_spec" type="JSONB">
+                <constraints nullable="false"/>
+            </column>
+            <!-- JSON object matching ArgoCD ApplicationSet spec.template -->
+            <column name="template_spec" type="JSONB">
+                <constraints nullable="false"/>
+            </column>
+            <!-- When true, the rendered ApplicationSet has spec.goTemplate: true -->
+            <column name="go_template" type="BOOLEAN" defaultValueBoolean="false">
+                <constraints nullable="false"/>
+            </column>
+            <column name="status" type="VARCHAR(50)" defaultValue="UNKNOWN">
+                <constraints nullable="false"/>
+            </column>
+            <column name="created_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+            <column name="updated_at" type="TIMESTAMP" defaultValueComputed="CURRENT_TIMESTAMP"/>
+        </createTable>
+
+        <createIndex indexName="idx_applicationsets_project_id" tableName="applicationsets">
+            <column name="project_id"/>
+        </createIndex>
+        <createIndex indexName="idx_applicationsets_partition_id" tableName="applicationsets">
+            <column name="applicationset_partition_id"/>
+        </createIndex>
+
+        <rollback>
+            <dropTable tableName="applicationsets"/>
+        </rollback>
+    </changeSet>
+
+</databaseChangeLog>

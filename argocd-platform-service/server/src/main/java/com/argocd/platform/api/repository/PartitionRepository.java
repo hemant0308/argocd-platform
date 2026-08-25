@@ -1,6 +1,7 @@
 package com.argocd.platform.api.repository;
 
 import com.argocd.platform.api.model.response.argocd.ApplicationPartitionResponse;
+import com.argocd.platform.api.model.response.argocd.ApplicationSetPartitionResponse;
 import com.argocd.platform.api.model.response.argocd.ClusterPartitionResponse;
 import com.argocd.platform.api.model.response.argocd.ProjectPartitionResponse;
 import com.argocd.platform.api.util.PartitionType;
@@ -18,6 +19,8 @@ import java.util.Set;
 import java.util.UUID;
 
 import static com.argocd.platform.db.jooq.Tables.APPLICATION_PARTITIONS;
+import static com.argocd.platform.db.jooq.Tables.APPLICATIONSET_PARTITIONS;
+import static com.argocd.platform.db.jooq.Tables.APPLICATIONSETS;
 import static com.argocd.platform.db.jooq.Tables.APPLICATIONS;
 import static com.argocd.platform.db.jooq.Tables.CLUSTER_PARTITIONS;
 import static com.argocd.platform.db.jooq.Tables.CLUSTERS;
@@ -67,9 +70,10 @@ public class PartitionRepository {
     @Transactional
     public UUID resolvePartitionId(PartitionType type, int targetSize) {
         return switch (type) {
-            case PROJECT     -> resolveProjectPartition(targetSize);
-            case CLUSTER     -> resolveClusterPartition(targetSize);
-            case APPLICATION -> resolveApplicationPartition(targetSize);
+            case PROJECT         -> resolveProjectPartition(targetSize);
+            case CLUSTER         -> resolveClusterPartition(targetSize);
+            case APPLICATION     -> resolveApplicationPartition(targetSize);
+            case APPLICATION_SET -> resolveApplicationSetPartition(targetSize);
         };
     }
 
@@ -231,6 +235,66 @@ public class PartitionRepository {
     }
 
     // =========================================================================
+    // ApplicationSet partitions (global — same pattern as Application)
+    // =========================================================================
+
+    private UUID resolveApplicationSetPartition(int targetSize) {
+        List<UUID> partitionIds = dsl
+                .select(APPLICATIONSET_PARTITIONS.ID)
+                .from(APPLICATIONSET_PARTITIONS)
+                .orderBy(APPLICATIONSET_PARTITIONS.PARTITION_NUMBER)
+                .forUpdate()
+                .fetch(APPLICATIONSET_PARTITIONS.ID);
+
+        for (UUID partitionId : partitionIds) {
+            int count = dsl.fetchCount(
+                    APPLICATIONSETS, APPLICATIONSETS.APPLICATIONSET_PARTITION_ID.eq(partitionId));
+            if (count < targetSize) {
+                bumpApplicationSetPartitionGeneration(partitionId);
+                return partitionId;
+            }
+        }
+
+        return createApplicationSetPartition();
+    }
+
+    /**
+     * Atomically increments {@code applicationset_partitions.generation} by 1 and returns
+     * the new value. Used whenever the partition's desired state changes.
+     *
+     * @return the new generation value after the increment
+     */
+    public long bumpAndReturnApplicationSetPartitionGeneration(UUID partitionId) {
+        var record = dsl.update(APPLICATIONSET_PARTITIONS)
+                .set(APPLICATIONSET_PARTITIONS.GENERATION,
+                        APPLICATIONSET_PARTITIONS.GENERATION.add(1))
+                .where(APPLICATIONSET_PARTITIONS.ID.eq(partitionId))
+                .returning(APPLICATIONSET_PARTITIONS.GENERATION)
+                .fetchOne();
+        return record != null ? record.get(APPLICATIONSET_PARTITIONS.GENERATION) : 0L;
+    }
+
+    private void bumpApplicationSetPartitionGeneration(UUID partitionId) {
+        bumpAndReturnApplicationSetPartitionGeneration(partitionId);
+    }
+
+    private UUID createApplicationSetPartition() {
+        Integer maxNum = dsl
+                .select(DSL.max(APPLICATIONSET_PARTITIONS.PARTITION_NUMBER))
+                .from(APPLICATIONSET_PARTITIONS)
+                .fetchOne(DSL.max(APPLICATIONSET_PARTITIONS.PARTITION_NUMBER));
+        int nextNum = (maxNum != null ? maxNum : 0) + 1;
+
+        return dsl.insertInto(APPLICATIONSET_PARTITIONS)
+                .set(APPLICATIONSET_PARTITIONS.PARTITION_NUMBER, nextNum)
+                .set(APPLICATIONSET_PARTITIONS.STATUS, ResourceStatus.UNKNOWN.name())
+                .set(APPLICATIONSET_PARTITIONS.GENERATION, 0L)
+                .returning()
+                .fetchOne()
+                .get(APPLICATIONSET_PARTITIONS.ID);
+    }
+
+    // =========================================================================
     // Batch generation bumps — used by FailoverBatchService after migration
     // =========================================================================
 
@@ -272,6 +336,19 @@ public class PartitionRepository {
                 .execute();
     }
 
+    /**
+     * Bumps generation on a set of applicationset partition IDs in a single UPDATE.
+     */
+    @Transactional
+    public void bumpApplicationSetPartitionGenerations(Set<UUID> partitionIds) {
+        if (partitionIds.isEmpty()) return;
+        dsl.update(APPLICATIONSET_PARTITIONS)
+                .set(APPLICATIONSET_PARTITIONS.GENERATION,
+                        APPLICATIONSET_PARTITIONS.GENERATION.add(1))
+                .where(APPLICATIONSET_PARTITIONS.ID.in(partitionIds))
+                .execute();
+    }
+
     // =========================================================================
     // ArgoCD read-side: partition UUID / number resolution
     // =========================================================================
@@ -298,6 +375,10 @@ public class PartitionRepository {
                     .from(APPLICATION_PARTITIONS)
                     .where(APPLICATION_PARTITIONS.ID.eq(id))
                     .fetchOptional(APPLICATION_PARTITIONS.PARTITION_NUMBER);
+            case APPLICATION_SET -> dsl.select(APPLICATIONSET_PARTITIONS.PARTITION_NUMBER)
+                    .from(APPLICATIONSET_PARTITIONS)
+                    .where(APPLICATIONSET_PARTITIONS.ID.eq(id))
+                    .fetchOptional(APPLICATIONSET_PARTITIONS.PARTITION_NUMBER);
         };
     }
 
@@ -336,6 +417,17 @@ public class PartitionRepository {
     }
 
     /**
+     * Resolves an applicationset partition UUID by its global partition number.
+     */
+    @Transactional(readOnly = true)
+    public Optional<UUID> findApplicationSetPartitionIdByNumber(int partitionNumber) {
+        return dsl.select(APPLICATIONSET_PARTITIONS.ID)
+                .from(APPLICATIONSET_PARTITIONS)
+                .where(APPLICATIONSET_PARTITIONS.PARTITION_NUMBER.eq(partitionNumber))
+                .fetchOptional(APPLICATIONSET_PARTITIONS.ID);
+    }
+
+    /**
      * Returns the current generation of an application partition.
      * Used by the plugin service to include the generation in each
      * {@code application-groups} response entry.
@@ -348,6 +440,22 @@ public class PartitionRepository {
                 .from(APPLICATION_PARTITIONS)
                 .where(APPLICATION_PARTITIONS.ID.eq(partitionId))
                 .fetchOne(APPLICATION_PARTITIONS.GENERATION);
+        return gen != null ? gen : 0L;
+    }
+
+    /**
+     * Returns the current generation of an applicationset partition.
+     * Used by the plugin service to include the generation in each
+     * {@code applicationset-groups} response entry.
+     *
+     * @return current generation, or 0 if the partition does not exist
+     */
+    @Transactional(readOnly = true)
+    public long findApplicationSetPartitionGeneration(UUID partitionId) {
+        Long gen = dsl.select(APPLICATIONSET_PARTITIONS.GENERATION)
+                .from(APPLICATIONSET_PARTITIONS)
+                .where(APPLICATIONSET_PARTITIONS.ID.eq(partitionId))
+                .fetchOne(APPLICATIONSET_PARTITIONS.GENERATION);
         return gen != null ? gen : 0L;
     }
 
@@ -404,6 +512,34 @@ public class PartitionRepository {
                         .partitionNumber(r.get(CLUSTER_PARTITIONS.PARTITION_NUMBER))
                         .generation(r.get(CLUSTER_PARTITIONS.GENERATION))
                         .clusterCount(r.get(clusterCount))
+                        .build());
+    }
+
+    /**
+     * Returns all applicationset partitions with the count of applicationsets assigned to each.
+     * Ordered by partition_number. Globally partitioned (Option A — no CP association).
+     */
+    @Transactional(readOnly = true)
+    public List<ApplicationSetPartitionResponse> findAllApplicationSetPartitions() {
+        Field<Integer> appSetCount = DSL.count(APPLICATIONSETS.ID).as("applicationset_count");
+        return dsl.select(
+                        APPLICATIONSET_PARTITIONS.ID,
+                        APPLICATIONSET_PARTITIONS.PARTITION_NUMBER,
+                        APPLICATIONSET_PARTITIONS.GENERATION,
+                        appSetCount)
+                .from(APPLICATIONSET_PARTITIONS)
+                .leftJoin(APPLICATIONSETS)
+                        .on(APPLICATIONSETS.APPLICATIONSET_PARTITION_ID
+                                .eq(APPLICATIONSET_PARTITIONS.ID))
+                .groupBy(APPLICATIONSET_PARTITIONS.ID,
+                        APPLICATIONSET_PARTITIONS.PARTITION_NUMBER,
+                        APPLICATIONSET_PARTITIONS.GENERATION)
+                .orderBy(APPLICATIONSET_PARTITIONS.PARTITION_NUMBER)
+                .fetch(r -> ApplicationSetPartitionResponse.builder()
+                        .id(r.get(APPLICATIONSET_PARTITIONS.ID))
+                        .partitionNumber(r.get(APPLICATIONSET_PARTITIONS.PARTITION_NUMBER))
+                        .generation(r.get(APPLICATIONSET_PARTITIONS.GENERATION))
+                        .applicationSetCount(r.get(appSetCount))
                         .build());
     }
 

@@ -1,0 +1,98 @@
+{{- /*
+  Two-layer template escaping
+  ───────────────────────────
+  Helm processes this file first.  To pass ArgoCD goTemplate tokens through
+  unchanged, wrap them in Helm string literals:
+
+    {{ "{{ .controlPlane }}" }}   →  Helm emits  →  {{ .controlPlane }}
+
+  ArgoCD then evaluates the literal using goTemplate (spec.goTemplate: true).
+
+  goTemplate is required because the applicationSets field is a native JSON array
+  from the plugin.  With goTemplate, {{ .applicationSets | toJson }} serialises it
+  to a proper JSON string that Helm receives as .Values.applicationSets.
+  The downstream chart (applicationset-registration) parses it back with
+  fromJsonArray (Helm built-in that correctly handles JSON arrays).
+
+  Each applicationset entry carries nested generatorSpec (array) and templateSpec (map).
+  fromJsonArray on the outer list gives a Go slice; .generatorSpec and .templateSpec
+  within each element are automatically typed Go structures that toYaml can serialise.
+
+  goTemplate safety:
+  The user's generatorSpec/templateSpec may contain ArgoCD template tokens such as
+  {{cluster}} (standard syntax) or {{ .cluster }} (goTemplate syntax). These tokens
+  appear as string values inside the data structures — they are NOT re-evaluated by
+  Helm's toYaml pipeline. Helm only evaluates Go template expressions inside template
+  FILES, not inside data values. Both syntaxes pass through untouched to ArgoCD.
+*/ -}}
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  # Named applicationset-groups-{N} (Option A: globally unique partition numbers).
+  # The plugin returns one entry per CP for this partition (CP fan-out via project),
+  # so the inner template name uses {{ .controlPlane }} from the plugin response
+  # to produce distinct leaf Applications per CP.
+  name: applicationset-groups-{{ .Values.partitionNumber }}
+  namespace: argocd
+  annotations:
+    argocd-platform/partition-number: "{{ .Values.partitionNumber }}"
+    argocd-platform/generation: "{{ .Values.generation }}"
+
+spec:
+  goTemplate: true
+
+  generators:
+    - plugin:
+        requeueAfterSeconds: {{ .Values.requeueAfterSeconds }}
+        configMapRef:
+          name: argocd-platform-plugin
+        input:
+          parameters:
+            resource: "applicationset-groups"
+            partitionNumber: "{{ .Values.partitionNumber }}"
+            # generation is included in the spec (not just metadata.annotations) so that
+            # when the partition generation changes, this ApplicationSet's spec changes →
+            # ArgoCD increments metadata.generation → controller reconciles immediately
+            # rather than waiting the requeueAfterSeconds safety-net poll (600 s).
+            generation: "{{ .Values.generation }}"
+
+  template:
+    metadata:
+      # applicationset-group-{N}-{controlPlane}: leaf Application that deploys
+      # applicationset-registration chart to the target CP.
+      name: 'applicationset-group-{{ .Values.partitionNumber }}-{{ "{{ .controlPlane }}" }}'
+      labels:
+        # resource-type drives switch-case routing in ArgoCDStatusService.
+        argocd-platform/resource-type: applicationset-partition
+        # partition-number and control-plane are required fields in ArgoCDStatusRequest.
+        argocd-platform/partition-number: "{{ .Values.partitionNumber }}"
+        argocd-platform/control-plane: '{{ "{{ .controlPlane }}" }}'
+        argocd-platform/generation: '{{ "{{ .generation }}" }}'
+      annotations:
+        # Subscribe to on-applicationset-partition-synced so the managed ArgoCD
+        # fires a webhook to /internal/argocd/status on every successful sync.
+        notifications.argoproj.io/subscribe.on-applicationset-partition-synced.platform-status: ""
+
+    spec:
+      project: default
+
+      source:
+        repoURL: {{ .Values.repoURL }}
+        targetRevision: {{ .Values.targetRevision }}
+        path: charts/applicationset-registration
+        helm:
+          valuesObject:
+            partitionNumber: {{ .Values.partitionNumber }}
+            controlPlane: '{{ "{{ .controlPlane }}" }}'
+            applicationSets: '{{ "{{ .applicationSets | toJson }}" }}'
+
+      destination:
+        name: '{{ "{{ .controlPlane }}" }}'
+        namespace: argocd
+
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
