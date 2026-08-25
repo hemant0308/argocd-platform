@@ -41,7 +41,7 @@ from pathlib import Path
 # Configuration defaults
 # ──────────────────────────────────────────────────────────────────────────────
 
-DEFAULT_API_URL = "http://localhost:8080"
+DEFAULT_API_URL = "http://localhost:8081"
 DEFAULT_REPO_URL = "https://github.com/hemant0308/argocd-platform.git"
 REPO_REVISION = "main"
 CHART_PATH = "charts/sample-app"

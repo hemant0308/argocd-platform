@@ -2313,3 +2313,52 @@ The table below lists every operation that bumps a partition `generation`, the s
 | Missed webhook fallback (A7) | `fallbackHardDeleteTimeout` fires after 300 s → bump → L1 → L3 | 300 s + ≤ 10 s |
 | Control plane deletion (X1) | No generation bump; Level 3 polls on schedule | ≤ 600 s |
 | New partition created (first resource in partition) | Generation = 0, but Level 1 sees new partition number → L2 Application created → L3 AppSet created | ≤ 10 s |
+
+---
+
+## 32.17 User-Defined ApplicationSets
+
+### No support for end-user ApplicationSet creation
+
+The platform currently exposes only a single-application registration model: users register one application at a time via `POST /api/v1/applications`. Each registration produces a single ArgoCD Application on the target control plane, rendered by the `application-registration` Helm chart. Users who need multi-cluster fan-out, matrix deployments, or environment-promoted rollouts must either register duplicate applications manually or work around the platform entirely with raw ArgoCD access.
+
+**Needed:** Allow end users to define and manage their own ApplicationSets through the platform API, without requiring direct ArgoCD cluster access.
+
+**Design constraints:**
+
+- **Platform remains the only ArgoCD writer.** Users submit ApplicationSet intent to the platform API; the platform renders and manages the resulting ArgoCD resource. Users never interact with ArgoCD directly. This preserves the one-way call contract and keeps credentials centralised.
+- **Scoped to a registered project.** A user-defined ApplicationSet must reference a project that the user is a member of. The AppProject boundary enforces the existing cluster destination and RBAC constraints — no new permission model is needed for the ApplicationSet itself.
+- **Generator whitelist.** Only safe, deterministic generators are permitted for user-defined AppSets: `list`, `matrix` (of whitelisted inner generators), `merge`, and `git` (directory/file, path-restricted to the user's declared repository). Cluster and pull-request generators are blocked unless the user holds an operator-level role, as they can enumerate cluster secrets or trigger on untrusted PRs.
+- **Template restrictions.** The `destination.server` / `destination.name` must be drawn from the project's allowed clusters — the platform validates this at registration time and re-validates on every sync. Users cannot inject arbitrary cluster targets.
+- **Lifecycle tied to the platform application record.** A user-defined ApplicationSet is backed by a `user_application_sets` table row. Create / update / delete go through the platform service; generation bumps and cache invalidation follow the same event-driven path as individual applications (§32.16).
+
+**Schema (sketch):**
+
+```sql
+CREATE TABLE user_application_sets (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name              VARCHAR(255) NOT NULL,
+  project_id        UUID NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+  application_partition_id UUID NOT NULL REFERENCES application_partitions(id),
+  generator_spec    JSONB NOT NULL,   -- validated generator config (whitelisted types only)
+  template_spec     JSONB NOT NULL,   -- validated template (destinations must be in project clusters)
+  created_by        UUID REFERENCES users(id),
+  created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  status            VARCHAR(50) NOT NULL DEFAULT 'UNKNOWN',
+  UNIQUE (project_id, name)
+);
+```
+
+**API to expose:**
+- `POST /api/v1/projects/{projectId}/applicationsets` — register a new user-defined ApplicationSet
+- `GET /api/v1/projects/{projectId}/applicationsets` — list ApplicationSets for a project
+- `GET /api/v1/projects/{projectId}/applicationsets/{id}` — get details and current status
+- `PUT /api/v1/projects/{projectId}/applicationsets/{id}` — update generator or template spec
+- `DELETE /api/v1/projects/{projectId}/applicationsets/{id}` — remove (platform prunes the ArgoCD resource)
+
+**Open questions (to be resolved during design):**
+- Whether user-defined AppSets are rendered inline in the existing `application-registration` chart or via a dedicated `user-applicationset` chart.
+- Validation strategy for `generator_spec` and `template_spec` — JSON Schema enforcement at API layer vs. dry-run against ArgoCD API.
+- Status propagation: ArgoCD does not emit per-ApplicationSet sync events; polling or a dedicated notification trigger is needed.
+- Quota: maximum number of user-defined ApplicationSets per project to prevent resource exhaustion on shared control planes.
