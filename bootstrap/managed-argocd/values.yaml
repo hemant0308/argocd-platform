@@ -30,7 +30,7 @@ notifications:
 
   notifiers:
     service.webhook.platform-status: |
-      url: "http://host.docker.internal:8080"
+      url: "http://host.docker.internal:8081"
       headers:
         - name: Authorization
           value: Bearer $platform-notification-token

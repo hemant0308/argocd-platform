@@ -1004,22 +1004,49 @@ def phase_startup(managed_cluster: str = "managed") -> None:
 
     print("\n  Port-forwards are running. Press Ctrl+C to stop.\n")
 
-    # ── Keep alive with auto-restart ─────────────────────────────────────
+    # ── Keep alive with active health-check + auto-restart ───────────────
+    # poll() catches process exits; the health-check catches stale tunnels
+    # (process keeps running but stops forwarding — common after hours of uptime).
+    HEALTH_INTERVAL = 30   # probe each port every N seconds
+    last_health: dict = {lp: 0.0 for _, lp, *_ in forwards}
+
+    def _probe(local_port: int) -> bool:
+        """Return True if the local port is accepting connections."""
+        try:
+            with socket.create_connection(("127.0.0.1", local_port), timeout=3):
+                return True
+        except OSError:
+            return False
+
     try:
         while True:
             time.sleep(5)
+            now = time.time()
             for i, (cluster_name, local_port, svc, svc_port, scheme, proc) in enumerate(forwards):
                 if proc is None:
-                    # Port was pre-bound; nothing to monitor
-                    continue
-                if proc.poll() is not None:
+                    continue  # pre-bound port; not managed by us
+
+                # Check if the process has exited
+                exited = proc.poll() is not None
+                # Periodically probe the port even when the process looks alive
+                stale = False
+                if not exited and (now - last_health.get(local_port, 0)) >= HEALTH_INTERVAL:
+                    stale = not _probe(local_port)
+                    last_health[local_port] = now
+
+                if exited or stale:
+                    reason = f"exited (rc={proc.returncode})" if exited else "stale tunnel (health-check failed)"
+                    warn(f"Port-forward for '{cluster_name}' (:{local_port}) {reason} — restarting…")
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                    time.sleep(1)
                     context = f"kind-{cluster_name}"
-                    warn(
-                        f"Port-forward for '{cluster_name}' (:{local_port}) exited "
-                        f"(rc={proc.returncode}) — restarting…"
-                    )
                     new_proc = _start_port_forward(context, svc, local_port, svc_port)
                     forwards[i] = (cluster_name, local_port, svc, svc_port, scheme, new_proc)
+                    last_health[local_port] = time.time()
+                    info(f"Port-forward restarted for '{cluster_name}' (pid={new_proc.pid})")
     except KeyboardInterrupt:
         print("\n\n  Stopping port-forwards…")
         for *_, proc in forwards:
@@ -1210,6 +1237,19 @@ Examples:
         help="Also remove cp-* entries from argocd/managed/values.yaml (off by default).",
     )
 
+    # ── local-git ─────────────────────────────────────────────────────────────
+    lg_p = subparsers.add_parser(
+        "local-git",
+        help=(
+            "Start a local git daemon so ArgoCD reads from the local repo "
+            "instead of GitHub. Commit changes locally — no push needed."
+        ),
+    )
+    lg_p.add_argument(
+        "--port", type=int, default=9418, metavar="PORT",
+        help="Port for the git daemon (default: 9418, standard git:// protocol port)",
+    )
+
     # ── startup ───────────────────────────────────────────────────────────────
     su_p = subparsers.add_parser(
         "startup",
@@ -1314,6 +1354,13 @@ Examples:
 
         try:
             phase_teardown(skip_api_cleanup=args.skip_api_cleanup, clean_values=args.clean_values)
+        except KeyboardInterrupt:
+            print("\n\nInterrupted.", file=sys.stderr)
+            sys.exit(130)
+
+    elif args.command == "local-git":
+        try:
+            phase_local_git(port=args.port)
         except KeyboardInterrupt:
             print("\n\nInterrupted.", file=sys.stderr)
             sys.exit(130)
