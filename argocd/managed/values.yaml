@@ -4,7 +4,7 @@
 plugin:
   # ArgoCD POSTs to {baseUrl}/api/v1/getparams.execute on every reconcile.
   # Override per environment — this default is for local Docker Desktop only.
-  baseUrl: "http://host.docker.internal:8080"
+  baseUrl: "http://host.docker.internal:8081"
   # Token sent as "Authorization: Bearer <token>" to the plugin service.
   # Generate a strong value with: openssl rand -hex 32
   token: "argocd-platform-plugin-token"

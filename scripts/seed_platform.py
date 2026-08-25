@@ -29,6 +29,7 @@ import json
 import os
 import random
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -51,6 +52,8 @@ TOKEN_SECRET = "argocd-manager-token"
 
 MANAGED_ARGOCD_SVC = "argocd-server"                     # service name in the managed cluster
 MANAGED_PORT = 8082                                        # local port for managed ArgoCD UI
+MANAGED_SVC_PORT = 80                                      # svc port 80 (HTTP) — insecure: true in values.yaml
+CP_SVC_PORT = 443                                          # svc port 443 (HTTPS) for CP clusters
 CP_BASE_PORT = 8083                                        # first port assigned to cp-1, cp-2, …
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -838,12 +841,58 @@ def wait_for_argocd_server(context: str, cp_name: str, timeout: int = 600) -> bo
     return False
 
 
-def _start_port_forward(context: str, svc: str, local_port: int) -> subprocess.Popen:
+def get_argocd_initial_password(context: str) -> str:
+    """
+    Retrieve the ArgoCD initial admin password for the given kubectl context.
+    Tries 'argocd admin initial-password' first; falls back to reading the
+    argocd-initial-admin-secret via kubectl.
+    Returns the password string, or '<unavailable>' on failure.
+    """
+    # Primary: argocd CLI
+    result = subprocess.run(
+        ["argocd", "admin", "initial-password", "-n", "argocd", "--context", context],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        # First non-empty line is the password
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line:
+                return line
+
+    # Fallback: kubectl secret
+    result = subprocess.run(
+        [
+            "kubectl", "--context", context,
+            "get", "secret", "argocd-initial-admin-secret",
+            "-n", "argocd",
+            "-o", "jsonpath={.data.password}",
+        ],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        return base64.b64decode(result.stdout.strip()).decode()
+
+    return "<unavailable>"
+
+
+def _port_in_use(port: int) -> bool:
+    """Return True if something is already listening on 127.0.0.1:<port>."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+            return False
+        except OSError:
+            return True
+
+
+def _start_port_forward(context: str, svc: str, local_port: int, svc_port: int = 443) -> subprocess.Popen:
     cmd = [
         "kubectl", "--context", context,
         "port-forward", f"svc/{svc}",
         "-n", "argocd",
-        f"{local_port}:443",
+        f"{local_port}:{svc_port}",
     ]
     return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -857,8 +906,8 @@ def phase_startup(managed_cluster: str = "managed") -> None:
     4. Print the URL table and keep port-forwards alive (auto-restart on crash).
 
     Port assignments:
-        managed  → {MANAGED_PORT}  (https://manager.localhost:{MANAGED_PORT})
-        cp-1     → {CP_BASE_PORT}  (https://cp1.localhost:{CP_BASE_PORT})
+        managed  → {MANAGED_PORT}  (http://manager.localhost:{MANAGED_PORT})   ← HTTP (insecure: true)
+        cp-1     → {CP_BASE_PORT}  (https://cp1.localhost:{CP_BASE_PORT})       ← HTTPS
         cp-2     → {CP_BASE_PORT+1}  ...
     """
     log("Startup — Port-forwarding ArgoCD servers")
@@ -896,43 +945,62 @@ def phase_startup(managed_cluster: str = "managed") -> None:
         ready_cps = []
 
     # ── Build port-forward table ─────────────────────────────────────────
-    # (cluster_name, local_port, svc_name)
+    # (cluster_name, local_port, svc_name, svc_port, scheme)
     forwards_spec: list = []
 
     if has_managed:
-        forwards_spec.append((managed_cluster, MANAGED_PORT, MANAGED_ARGOCD_SVC))
+        # managed ArgoCD runs with server.insecure: true → HTTP on svc port 80
+        forwards_spec.append((managed_cluster, MANAGED_PORT, MANAGED_ARGOCD_SVC, MANAGED_SVC_PORT, "http"))
 
     for i, cp in enumerate(ready_cps):
         svc = f"control-plane-{cp}-argocd-server"
-        forwards_spec.append((cp, CP_BASE_PORT + i, svc))
+        forwards_spec.append((cp, CP_BASE_PORT + i, svc, CP_SVC_PORT, "https"))
 
     if not forwards_spec:
         warn("Nothing to port-forward.")
         return
 
     # ── Launch port-forwards ─────────────────────────────────────────────
-    forwards = []   # (cluster_name, local_port, svc_name, Popen)
-    for cluster_name, local_port, svc in forwards_spec:
+    forwards = []   # (cluster_name, local_port, svc_name, svc_port, scheme, Popen|None)
+    for cluster_name, local_port, svc, svc_port, scheme in forwards_spec:
         context = f"kind-{cluster_name}"
-        proc = _start_port_forward(context, svc, local_port)
-        forwards.append((cluster_name, local_port, svc, proc))
-        info(f"port-forward :{local_port} → {cluster_name}  svc/{svc}  (pid={proc.pid})")
+        if _port_in_use(local_port):
+            info(f"Port {local_port} already bound — reusing existing forward for '{cluster_name}'.")
+            forwards.append((cluster_name, local_port, svc, svc_port, scheme, None))
+        else:
+            proc = _start_port_forward(context, svc, local_port, svc_port)
+            forwards.append((cluster_name, local_port, svc, svc_port, scheme, proc))
+            info(f"port-forward :{local_port} → {cluster_name} svc/{svc}:{svc_port} (pid={proc.pid})")
 
     # Give the OS a moment to bind the ports
     time.sleep(2)
 
     # ── Print URL table ──────────────────────────────────────────────────
     log("ArgoCD UIs — port-forward active")
-    for cluster_name, local_port, svc, _ in forwards:
+    for cluster_name, local_port, svc, svc_port, scheme, _ in forwards:
         if cluster_name == managed_cluster:
             label = "Managed"
-            host = f"manager.localhost:{local_port}"
+            # Use 127.0.0.1 for HTTP: browsers enforce HSTS on 'localhost' hostnames
+            # and upgrade HTTP→HTTPS, which breaks the connection to the insecure server.
+            url = f"{scheme}://127.0.0.1:{local_port}"
         else:
             # cp-1 → cp1, cp-2 → cp2
             short = cluster_name.replace("-", "")
             label = cluster_name
-            host = f"{short}.localhost:{local_port}"
-        print(f"  {label:<10}  -->  https://{host}")
+            url = f"{scheme}://{short}.localhost:{local_port}"
+        print(f"  {label:<10}  -->  {url}")
+
+    # ── Print initial admin passwords ───────────────────────────────────
+    print()
+    log("ArgoCD initial admin passwords")
+    for cluster_name, local_port, svc, svc_port, scheme, _ in forwards:
+        context = f"kind-{cluster_name}"
+        password = get_argocd_initial_password(context)
+        if cluster_name == managed_cluster:
+            label = "Managed"
+        else:
+            label = cluster_name
+        print(f"  {label:<10}  username: admin   password: {password}")
 
     print("\n  Port-forwards are running. Press Ctrl+C to stop.\n")
 
@@ -940,20 +1008,129 @@ def phase_startup(managed_cluster: str = "managed") -> None:
     try:
         while True:
             time.sleep(5)
-            for i, (cluster_name, local_port, svc, proc) in enumerate(forwards):
+            for i, (cluster_name, local_port, svc, svc_port, scheme, proc) in enumerate(forwards):
+                if proc is None:
+                    # Port was pre-bound; nothing to monitor
+                    continue
                 if proc.poll() is not None:
                     context = f"kind-{cluster_name}"
                     warn(
                         f"Port-forward for '{cluster_name}' (:{local_port}) exited "
                         f"(rc={proc.returncode}) — restarting…"
                     )
-                    new_proc = _start_port_forward(context, svc, local_port)
-                    forwards[i] = (cluster_name, local_port, svc, new_proc)
+                    new_proc = _start_port_forward(context, svc, local_port, svc_port)
+                    forwards[i] = (cluster_name, local_port, svc, svc_port, scheme, new_proc)
     except KeyboardInterrupt:
         print("\n\n  Stopping port-forwards…")
-        for _, _, _, proc in forwards:
-            proc.terminate()
+        for *_, proc in forwards:
+            if proc is not None:
+                proc.terminate()
         print("  Done.\n")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Entry point
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Local git server
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _get_kind_host_ip() -> str:
+    """
+    Return the IP of the Docker host reachable from inside Kind containers.
+    Tries 'host.docker.internal' first (macOS/Windows Docker Desktop), then
+    falls back to the gateway IP of the 'kind' Docker network (Linux).
+    """
+    try:
+        ip = socket.gethostbyname("host.docker.internal")
+        return "host.docker.internal"
+    except socket.gaierror:
+        pass
+
+    result = subprocess.run(
+        ["docker", "network", "inspect", "kind",
+         "--format", "{{range .IPAM.Config}}{{.Gateway}} {{end}}"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        # Take the first IPv4 gateway
+        for token in result.stdout.split():
+            token = token.strip()
+            if token and ":" not in token:   # skip IPv6
+                return token
+
+    return "172.17.0.1"   # Docker default bridge fallback
+
+
+def phase_local_git(port: int = 9418) -> None:
+    """
+    Start a git daemon serving the local repo so ArgoCD can clone and pull
+    without pushing to GitHub.
+
+    - git daemon serves COMMITTED changes (git commit; no push needed).
+    - The daemon is reachable from inside Kind containers via the Docker
+      host gateway IP.
+    - Port-forward is kept alive; Ctrl+C stops it.
+    """
+    log("Local Git Server")
+
+    if _port_in_use(port):
+        info(f"Port {port} is already in use — git daemon may already be running.")
+        host_ip = _get_kind_host_ip()
+        git_url = f"git://{host_ip}:{port}/{REPO_ROOT.name}"
+        _print_local_git_summary(git_url, port, already_running=True)
+        return
+
+    _check_tools("git")
+
+    # git daemon --base-path=<parent>  lets clients use git://<host>:<port>/<repo_name>
+    cmd = [
+        "git", "daemon",
+        "--reuseaddr",
+        f"--port={port}",
+        f"--base-path={REPO_ROOT.parent}",
+        "--export-all",
+        "--verbose",
+        str(REPO_ROOT),
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    info(f"git daemon started — pid={proc.pid}  port={port}")
+
+    host_ip = _get_kind_host_ip()
+    git_url = f"git://{host_ip}:{port}/{REPO_ROOT.name}"
+    _print_local_git_summary(git_url, port)
+
+    print("  Press Ctrl+C to stop the git daemon.\n")
+    try:
+        while True:
+            time.sleep(5)
+            if proc.poll() is not None:
+                warn(f"git daemon exited unexpectedly (rc={proc.returncode}) — restarting…")
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                info(f"git daemon restarted — pid={proc.pid}")
+    except KeyboardInterrupt:
+        print("\n\n  Stopping git daemon…")
+        proc.terminate()
+        print("  Done.\n")
+
+
+def _print_local_git_summary(git_url: str, port: int, already_running: bool = False) -> None:
+    status = "(already running)" if already_running else ""
+    log(f"Local Git Server ready {status}")
+    print(f"  Repo URL : {git_url}")
+    print(f"  Port     : {port}")
+    print()
+    print("  Use this URL with the seed command:")
+    print(f"    python3 scripts/seed_platform.py seed ... --repo {git_url}")
+    print()
+    print("  Patch the managed ArgoCD Application to read from local git:")
+    print(f"    kubectl patch application argocd -n argocd --context kind-managed \\")
+    print(f"      --type merge \\")
+    print(f"      -p '{{\"spec\":{{\"source\":{{\"repoURL\":\"{git_url}\"}}}}}}'")
+    print()
+    print("  Workflow: edit files → git commit (no push!) → ArgoCD auto-syncs")
+    print()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1003,8 +1180,8 @@ Examples:
         help="Number of projects to create (project1 … projectN)",
     )
     seed_p.add_argument(
-        "--applications", type=int, required=True, metavar="N",
-        help="Number of applications to create (app-0001 … app-NNNN)",
+        "--applications", type=int, default=0, metavar="N",
+        help="Number of applications to create (app-0001 … app-NNNN). Omit to skip.",
     )
     seed_p.add_argument(
         "--repo", metavar="URL", default=DEFAULT_REPO_URL,
@@ -1058,12 +1235,13 @@ Examples:
 ╔══════════════════════════════════════════════════════════╗
 ║          ArgoCD Platform — Local Environment Seeder      ║
 ╚══════════════════════════════════════════════════════════╝""")
+        app_summary = f"app-0001 … app-{args.applications:04d}" if args.applications else "skipped"
         print(f"""
   Managed cluster : managed  (always created first)
   Control planes  : {args.control_planes}  (cp-1 … cp-{args.control_planes})
   Destinations    : {args.destinations}  (dest-1 … dest-{args.destinations})
   Projects        : {args.projects}  (project1 … project{args.projects})
-  Applications    : {args.applications}  (app-0001 … app-{args.applications:04d})
+  Applications    : {args.applications if args.applications else 0}  ({app_summary})
   Repo URL        : {args.repo}
   API             : {_api_base}
   Values file     : {VALUES_FILE}
@@ -1094,7 +1272,11 @@ Examples:
             cp_records = phase_control_planes(args.control_planes)
             dest_records = phase_destinations(args.destinations, cp_records)
             project_records = phase_projects(args.projects, dest_records)
-            app_records = phase_applications(args.applications, project_records, args.repo)
+            if args.applications:
+                app_records = phase_applications(args.applications, project_records, args.repo)
+            else:
+                app_records = []
+                info("--applications not provided — skipping application creation.")
         except KeyboardInterrupt:
             print("\n\nInterrupted.", file=sys.stderr)
             sys.exit(130)
@@ -1112,6 +1294,18 @@ Examples:
   Note: application names have a 5-char hex suffix appended by the
   platform API (e.g. app-0001 → app-0001-3f2a1). See output above.
 """)
+        log("ArgoCD initial admin passwords")
+        # Managed ArgoCD is installed by now; CP ArgoCD installs after git push + sync
+        all_seeded_clusters = ["managed"] + [f"cp-{i}" for i in range(1, args.control_planes + 1)]
+        for cluster_name in all_seeded_clusters:
+            context = f"kind-{cluster_name}"
+            label = "Managed" if cluster_name == "managed" else cluster_name
+            password = get_argocd_initial_password(context)
+            print(f"  {label:<10}  username: admin   password: {password}")
+        if args.control_planes:
+            print("\n  Note: CP passwords show '<unavailable>' until ArgoCD is synced by managed ArgoCD")
+            print("        (run 'seed startup' after git push to see them once ready)")
+        print()
 
     elif args.command == "teardown":
         _api_base = args.api
