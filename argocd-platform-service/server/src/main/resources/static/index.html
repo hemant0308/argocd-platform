@@ -182,6 +182,7 @@
   <button class="tab-btn"        data-tab="clusters">Clusters</button>
   <button class="tab-btn"        data-tab="projects">Projects</button>
   <button class="tab-btn"        data-tab="applications">Applications</button>
+  <button class="tab-btn"        data-tab="applicationsets">Application Sets</button>
 </div>
 
 <!-- ═══════════════════ CONTROL PLANES TAB ═══════════════════ -->
@@ -269,6 +270,28 @@
       </table>
     </div>
     <div id="applications-empty" class="empty-state" style="display:none">No applications registered yet.</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ APPLICATION SETS TAB ═══════════════════ -->
+<div id="tab-applicationsets" class="tab-panel">
+  <div class="card">
+    <div class="card-header">
+      <h2>Application Sets</h2>
+      <button class="btn btn-primary" onclick="openAppSetModal()">+ Create Application Set</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th><th>Project</th><th>goTemplate</th>
+            <th>Status</th><th>Partition</th><th>Created</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="appsets-tbody"></tbody>
+      </table>
+    </div>
+    <div id="appsets-empty" class="empty-state" style="display:none">No application sets registered yet.</div>
   </div>
 </div>
 
@@ -420,6 +443,50 @@
   </div>
 </div>
 
+<!-- ═══════════════════ APPLICATION SET MODAL ═══════════════════ -->
+<div id="appset-modal" class="modal-backdrop" onclick="closeOnBackdrop(event,'appset-modal')">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="appset-modal-title">Create Application Set</h3>
+      <button class="modal-close" onclick="closeModal('appset-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>Base Name <span class="req">*</span></label>
+        <input id="as-name" type="text" placeholder="my-appset" />
+        <div class="hint">A 5-char hex suffix is appended automatically (e.g. my-appset-3f2a1).</div>
+      </div>
+      <div class="form-group" id="as-project-row">
+        <label>Project <span class="req">*</span></label>
+        <select id="as-project">
+          <option value="">— select a project —</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <div class="checkbox-group">
+          <input type="checkbox" id="as-gotemplate" />
+          <label for="as-gotemplate" style="margin:0">goTemplate</label>
+        </div>
+        <div class="hint">When enabled, ArgoCD evaluates template variables as <code>{{ .variable }}</code> Go expressions instead of the standard <code>{{variable}}</code> syntax.</div>
+      </div>
+      <div class="form-group">
+        <label>Generators <span class="req">*</span> <span style="font-weight:400;color:#6b7280">(JSON array of ArgoCD generator objects)</span></label>
+        <textarea id="as-generators" rows="7"
+          placeholder='[{"list":{"elements":[{"cluster":"prod","url":"https://k8s.example.com"}]}}]'></textarea>
+      </div>
+      <div class="form-group">
+        <label>Template <span class="req">*</span> <span style="font-weight:400;color:#6b7280">(JSON object — ArgoCD spec.template)</span></label>
+        <textarea id="as-template" rows="10"
+          placeholder='{"metadata":{"name":"{{cluster}}-myapp"},"spec":{"project":"default","source":{"repoURL":"https://github.com/org/repo","targetRevision":"HEAD","path":"charts/myapp"},"destination":{"server":"{{url}}","namespace":"myapp"}}}'></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('appset-modal')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitAppSet()">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -430,11 +497,13 @@
   let clusters      = [];
   let projects      = [];
   let apps          = [];
+  let appSets       = [];
 
   let editingCpId          = null;
   let editingClusterId     = null;
   let editingProjectId     = null;
   let editingAppId         = null;
+  let editingAppSetId      = null;
 
   /* ──────────────────────────────────────────────────────
      Tab switching
@@ -455,11 +524,12 @@
 
   async function loadAll() {
     try {
-      [controlPlanes, clusters, projects, apps] = await Promise.all([
+      [controlPlanes, clusters, projects, apps, appSets] = await Promise.all([
         apiFetch('/api/v1/control-planes').catch(() => []),
         apiFetch('/api/v1/clusters').catch(() => []),
         apiFetch('/api/v1/projects').catch(() => []),
         apiFetch('/api/v1/applications').catch(() => []),
+        apiFetch('/api/v1/applicationsets').catch(() => []),
       ]);
     } catch (e) {
       showToast('Failed to load data: ' + e.message, 'error');
@@ -468,6 +538,7 @@
     renderClusters();
     renderProjects();
     renderApps();
+    renderAppSets();
   }
 
   /* ──────────────────────────────────────────────────────
@@ -935,6 +1006,117 @@
       showToast('Application deleted.');
       apps = await apiFetch('/api/v1/applications').catch(() => []);
       renderApps();
+    } catch (e) { showToast(e.message, 'error'); }
+  }
+
+  /* ══════════════════════════════════════════════════════
+     APPLICATION SETS
+  ══════════════════════════════════════════════════════ */
+  function renderAppSets() {
+    const tbody = document.getElementById('appsets-tbody');
+    const empty = document.getElementById('appsets-empty');
+    if (!appSets.length) { tbody.innerHTML = ''; empty.style.display = ''; return; }
+    empty.style.display = 'none';
+    tbody.innerHTML = appSets.map(as => {
+      const project = projects.find(p => p.id === as.projectId);
+      return `
+      <tr>
+        <td><strong>${esc(as.name)}</strong></td>
+        <td>${esc(project ? project.name : (as.projectName || '—'))}</td>
+        <td>${as.goTemplate
+          ? '<span class="badge badge-active">yes</span>'
+          : '<span class="badge badge-unknown">no</span>'}</td>
+        <td>${badgeHtml(as.status)}</td>
+        <td class="mono">${as.partitionNumber ?? '—'}</td>
+        <td>${fmtDate(as.createdAt)}</td>
+        <td class="actions">
+          <button class="btn btn-sm btn-edit"   onclick="openAppSetModal('${as.id}')">Edit</button>
+          <button class="btn btn-sm btn-delete" onclick="deleteAppSet('${as.id}','${esc(as.name)}')">Delete</button>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  function populateAppSetProjectDropdown(selectedId) {
+    const sel = document.getElementById('as-project');
+    sel.innerHTML = '<option value="">— select a project —</option>' +
+      projects.map(p =>
+        `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${esc(p.name)}</option>`
+      ).join('');
+  }
+
+  function openAppSetModal(id) {
+    editingAppSetId = id || null;
+    const isEdit = !!id;
+    document.getElementById('appset-modal-title').textContent = isEdit ? 'Edit Application Set' : 'Create Application Set';
+    document.getElementById('as-name').disabled = isEdit;
+    document.getElementById('as-project-row').style.display = isEdit ? 'none' : '';
+    document.getElementById('as-name').value       = '';
+    document.getElementById('as-gotemplate').checked = false;
+    document.getElementById('as-generators').value = '';
+    document.getElementById('as-template').value   = '';
+    if (isEdit) {
+      const as = appSets.find(x => x.id === id);
+      if (as) {
+        document.getElementById('as-name').value         = as.name || '';
+        document.getElementById('as-gotemplate').checked = !!as.goTemplate;
+        document.getElementById('as-generators').value   = as.generators
+            ? JSON.stringify(as.generators, null, 2) : '';
+        document.getElementById('as-template').value     = as.template
+            ? JSON.stringify(as.template, null, 2) : '';
+        populateAppSetProjectDropdown(as.projectId);
+      }
+    } else {
+      populateAppSetProjectDropdown(null);
+    }
+    openModal('appset-modal');
+  }
+
+  async function submitAppSet() {
+    const name       = document.getElementById('as-name').value.trim();
+    const projectId  = document.getElementById('as-project').value;
+    const goTemplate = document.getElementById('as-gotemplate').checked;
+    const isEdit     = !!editingAppSetId;
+
+    if (!isEdit && !name)      { showToast('Base name is required.', 'error'); return; }
+    if (!isEdit && !projectId) { showToast('Project is required.', 'error'); return; }
+
+    let generators, template;
+    try {
+      const rawGen = document.getElementById('as-generators').value;
+      if (!rawGen.trim()) { showToast('Generators are required.', 'error'); return; }
+      generators = JSON.parse(rawGen.trim());
+    } catch { showToast('Generators must be a valid JSON array.', 'error'); return; }
+    try {
+      const rawTpl = document.getElementById('as-template').value;
+      if (!rawTpl.trim()) { showToast('Template is required.', 'error'); return; }
+      template = JSON.parse(rawTpl.trim());
+    } catch { showToast('Template must be a valid JSON object.', 'error'); return; }
+
+    const body = { generators, template, goTemplate };
+    if (!isEdit) { body.name = name; body.projectId = projectId; }
+
+    try {
+      if (isEdit) {
+        await apiFetch(`/api/v1/applicationsets/${editingAppSetId}`, { method: 'PUT', body: JSON.stringify(body) });
+        showToast('Application set updated.');
+      } else {
+        await apiFetch('/api/v1/applicationsets', { method: 'POST', body: JSON.stringify(body) });
+        showToast('Application set created.');
+      }
+      closeModal('appset-modal');
+      appSets = await apiFetch('/api/v1/applicationsets').catch(() => []);
+      renderAppSets();
+    } catch (e) { showToast(e.message, 'error'); }
+  }
+
+  async function deleteAppSet(id, name) {
+    if (!confirm(`Delete application set "${name}"?\n\nArgoCD will prune all child resources on the next poll.`)) return;
+    try {
+      await apiFetch(`/api/v1/applicationsets/${id}`, { method: 'DELETE' });
+      showToast('Application set deleted.');
+      appSets = await apiFetch('/api/v1/applicationsets').catch(() => []);
+      renderAppSets();
     } catch (e) { showToast(e.message, 'error'); }
   }
 </script>

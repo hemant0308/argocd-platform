@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Scene 6 — The Growing Pain</title>
+  <title>Scene 6 — ApplicationSet Plugin Generator</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     * { margin:0; padding:0; box-sizing:border-box; }
@@ -31,6 +31,7 @@
       margin-top:14px; color:rgba(255,255,255,0.42);
       font-size:clamp(13px,1.6vw,20px); text-align:center; padding:0 40px;
     }
+
     #scene-label {
       position:absolute; top:28px; left:36px;
       color:rgba(255,255,255,0.18); font-size:11px;
@@ -39,25 +40,26 @@
     #step-label {
       position:absolute; top:28px; right:36px;
       color:rgba(255,255,255,0.30); font-size:11.5px; letter-spacing:0.03em;
-      font-weight:500; pointer-events:none; text-align:right; max-width:520px;
-      transition:color 0.5s;
+      font-weight:500; pointer-events:none; text-align:right; max-width:340px;
+      transition:opacity 0.4s;
     }
-    #step-label.error { color:#F87171; }
-    #response-counter {
+
+    #legend {
       position:absolute; bottom:68px; right:32px;
-      font-family:'Courier New', Courier, monospace;
-      font-size:13px; line-height:2.1;
-      opacity:0; transition:opacity 0.6s ease;
-      pointer-events:none; text-align:right;
+      display:flex; flex-direction:column; gap:7px;
+      opacity:0; transition:opacity 0.8s ease; pointer-events:none;
     }
-    #rc-apps { transition:color 0.6s; }
-    #rc-resp { font-weight:700; transition:color 0.6s; }
+    .leg-row { display:flex; align-items:center; gap:8px; }
+    .leg-line { width:28px; height:3px; border-radius:2px; display:block; }
+    .leg-text { font-size:11px; color:rgba(255,255,255,0.45); font-family:'Inter',sans-serif; letter-spacing:0.04em; }
+
     #progress {
       position:absolute; bottom:30px; left:50%; transform:translateX(-50%);
       display:flex; gap:7px; align-items:center; pointer-events:none;
     }
     .dot { width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,0.15); transition:all 0.4s ease; }
     .dot.active { background:rgba(255,255,255,0.75); width:18px; border-radius:3px; }
+
     #hint {
       position:absolute; bottom:52px; left:50%; transform:translateX(-50%);
       color:rgba(255,255,255,0.18); font-size:11px; letter-spacing:0.10em;
@@ -67,14 +69,31 @@
   </style>
 </head>
 <body>
+
 <canvas id="c"></canvas>
 <div id="narrative"><h1 id="nar-title"></h1><p id="nar-sub"></p></div>
-<div id="scene-label">Scene 6 &nbsp;/&nbsp; The Growing Pain</div>
+<div id="scene-label">Scene 6 &nbsp;/&nbsp; Plugin Generator</div>
 <div id="step-label"></div>
-<div id="response-counter">
-  <div id="rc-apps"></div>
-  <div id="rc-resp"></div>
+
+<div id="legend">
+  <div class="leg-row">
+    <span class="leg-line" style="background:#60A5FA;box-shadow:0 0 6px #60A5FA;"></span>
+    <span class="leg-text">ApplicationSet → API (poll request)</span>
+  </div>
+  <div class="leg-row">
+    <span class="leg-line" style="background:#F59E0B;box-shadow:0 0 6px #F59E0B;"></span>
+    <span class="leg-text">API → ApplicationSet (parameter response)</span>
+  </div>
+  <div class="leg-row">
+    <span class="leg-line" style="background:#A78BFA;box-shadow:0 0 6px #A78BFA;"></span>
+    <span class="leg-text">ApplicationSet → Application (creates)</span>
+  </div>
+  <div class="leg-row">
+    <span class="leg-line" style="background:#4ADE80;box-shadow:0 0 6px #4ADE80;"></span>
+    <span class="leg-text">Application → Cluster (reconcile)</span>
+  </div>
 </div>
+
 <div id="hint">Click or press Space to continue</div>
 <div id="progress"></div>
 
@@ -88,14 +107,14 @@ let W = 0, H = 0;
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   W = window.innerWidth; H = window.innerHeight;
-  canvas.width  = W * dpr; canvas.height = H * dpr;
-  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  canvas.width = W*dpr; canvas.height = H*dpr;
+  canvas.style.width = W+'px'; canvas.style.height = H+'px';
   ctx.scale(dpr, dpr);
 }
 resize();
 window.addEventListener('resize', resize);
 
-// ─── ArgoCD icon ──────────────────────────────────────────────────────────────
+// ─── ArgoCD icon — pre-rasterised once, blitted per frame ─────────────────────
 const _argoImg = new Image();
 let   _argoOC  = null;
 _argoImg.onload = () => {
@@ -106,6 +125,7 @@ _argoImg.onload = () => {
 };
 _argoImg.src = 'argocd-icon.svg';
 
+// Draw [icon  text] as a centred unit at (cx, cy)
 function drawArgoLabel(cx, cy, text, font, color, op, iconSz) {
   if (iconSz === undefined) iconSz = 15;
   ctx.save();
@@ -124,140 +144,79 @@ function drawArgoLabel(cx, cy, text, font, color, op, iconSz) {
   ctx.restore();
 }
 
-// ─── Managed ArgoCD box ────────────────────────────────────────────────────────
-const BOX = { x1:0.10, y1:0.17, x2:0.90, y2:0.72 };
+// ─── ArgoCD box bounds ────────────────────────────────────────────────────────
+const BOX = { x1:0.08, y1:0.26, x2:0.92, y2:0.73 };
 
 // ─── Nodes ────────────────────────────────────────────────────────────────────
 const NODES = {
-  platform: { rx:0.50, ry:0.085, type:'platform', step:1 },
-  appsets:  { rx:0.50, ry:0.295, type:'appsets',  step:1 },
-  cp1: { rx:0.28, ry:0.82, type:'cp', label:'CP-1', step:1 },
-  cp2: { rx:0.50, ry:0.82, type:'cp', label:'CP-2', step:1 },
-  cp3: { rx:0.72, ry:0.82, type:'cp', label:'CP-3', step:1 },
+  // Top: generic API Server
+  apiserver: { rx:0.50, ry:0.09, type:'apiserver', label:'API Server', sub:'Returns parameter sets', step:0 },
+
+  // Inside ArgoCD box: ApplicationSet
+  appset:    { rx:0.50, ry:0.41, type:'appset', label:'ApplicationSet', sub:'Plugin Generator', step:0 },
+
+  // Generated Applications (appear at step 3)
+  app1: { rx:0.28, ry:0.60, type:'genapp', label:'Application', step:3 },
+  app2: { rx:0.50, ry:0.62, type:'genapp', label:'Application', step:3 },
+  app3: { rx:0.72, ry:0.60, type:'genapp', label:'Application', step:3 },
+
+  // More apps (step 5 — API data changes)
+  app4: { rx:0.14, ry:0.58, type:'genapp', label:'Application', step:5 },
+  app5: { rx:0.86, ry:0.58, type:'genapp', label:'Application', step:5 },
+
+  // Destination clusters (always visible)
+  dc1: { rx:0.22, ry:0.86, type:'cluster', step:0 },
+  dc2: { rx:0.50, ry:0.88, type:'cluster', step:0 },
+  dc3: { rx:0.78, ry:0.86, type:'cluster', step:0 },
+
+  // More clusters (step 5)
+  dc4: { rx:0.08, ry:0.84, type:'cluster', step:5 },
+  dc5: { rx:0.92, ry:0.84, type:'cluster', step:5 },
 };
+
 const opacity = {};
 Object.keys(NODES).forEach(k => opacity[k] = 0);
 
-// ─── Connections (poll/response only — drives particles) ──────────────────────
+// ─── Connections ──────────────────────────────────────────────────────────────
 const CONNS = [
-  { from:'appsets',  to:'platform', step:1 },
-  { from:'platform', to:'appsets',  step:1 },
+  { from:'appset',    to:'apiserver', step:1 },   // poll
+  { from:'apiserver', to:'appset',    step:2 },   // response
+
+  // AppSet → generated Applications (creation, step 3)
+  { from:'appset', to:'app1', step:3 },
+  { from:'appset', to:'app2', step:3 },
+  { from:'appset', to:'app3', step:3 },
+  { from:'appset', to:'app4', step:5 },
+  { from:'appset', to:'app5', step:5 },
+
+  { from:'app1', to:'dc1', step:4 },
+  { from:'app2', to:'dc2', step:4 },
+  { from:'app3', to:'dc3', step:4 },
+  { from:'app4', to:'dc4', step:5 },
+  { from:'app5', to:'dc5', step:5 },
 ];
 
-// ─── App grid positions — 5 cols × 5 rows = 25 inside the ArgoCD box ─────────
-// Cols centred across box (x1=0.10 to x2=0.90)
-const APP_COLS = [0.196, 0.348, 0.500, 0.652, 0.804];
-// Rows between AppSets and box bottom
-const APP_ROWS = [0.415, 0.478, 0.538, 0.598, 0.653];
-const APP_GRID = [];
-for (const ry of APP_ROWS)
-  for (const rx of APP_COLS)
-    APP_GRID.push({ rx, ry });   // 25 positions, row-major
-
-// ─── AppNode class ─────────────────────────────────────────────────────────────
-class AppNode {
-  constructor(pos, idx) {
-    this.rx     = pos.rx; this.ry = pos.ry;
-    this.idx    = idx;
-    this.label  = 'App-' + (idx + 1);
-    this.cpIdx  = idx % 3;        // 0→cp1  1→cp2  2→cp3
-    this.op     = 0;
-    this.targetOp   = 0;
-    this.spawnDelay = 0;
-    this.errored    = false;
-  }
-  update() {
-    if (this.spawnDelay > 0) { this.spawnDelay--; return; }
-    this.op += (this.targetOp - this.op) * 0.07;
-  }
-  draw() {
-    if (this.op < 0.005) return;
-    const x  = this.rx * W, y = this.ry * H;
-    const aw = 72, ah = 22, ar = 5;
-    const col   = this.errored ? '#F87171' : '#2DD4BF';
-    const bgCol = this.errored ? 'rgba(28,4,4,0.97)' : 'rgba(4,22,22,0.97)';
-    ctx.save();
-    ctx.globalAlpha = this.op;
-    ctx.shadowColor = col; ctx.shadowBlur = this.errored ? 4 : 7;
-    ctx.fillStyle   = bgCol;
-    rr(x - aw/2, y - ah/2, aw, ah, ar); ctx.fill();
-    ctx.shadowBlur  = 0;
-    ctx.strokeStyle = this.errored ? 'rgba(239,68,68,0.60)' : 'rgba(45,212,191,0.65)';
-    ctx.lineWidth   = 1;
-    rr(x - aw/2, y - ah/2, aw, ah, ar); ctx.stroke();
-    ctx.fillStyle    = this.errored ? 'rgba(252,165,165,0.80)' : 'rgba(153,246,228,0.88)';
-    ctx.font         = '500 9.5px Inter,sans-serif';
-    ctx.textAlign    = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(this.label, x, y);
-    ctx.restore();
-  }
-  drawToCP() {
-    if (this.op < 0.03) return;
-    const cpKey = ['cp1','cp2','cp3'][this.cpIdx];
-    if ((opacity[cpKey] || 0) < 0.05) return;
-    const cp = NODES[cpKey];
-    const x1 = this.rx * W, y1 = this.ry * H + 11;
-    const x2 = cp.rx * W,   y2 = cp.ry * H - 28;
-    ctx.save();
-    ctx.globalAlpha = this.op * (this.errored ? 0.12 : 0.14);
-    ctx.strokeStyle = this.errored ? '#EF4444' : '#2DD4BF';
-    ctx.lineWidth   = 0.8;
-    ctx.setLineDash([3, 9]);
-    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.restore();
-  }
-}
-
-const appNodes = APP_GRID.map((p, i) => new AppNode(p, i));
-let revealedApps = 0;
-// Step → cumulative app count visible
-const STEP_APP_COUNTS = [0, 0, 3, 8, 15, 25, 25, 25];
-
-function revealAppsForStep(s) {
-  const target = STEP_APP_COUNTS[Math.min(s, STEP_APP_COUNTS.length - 1)];
-  if (target <= revealedApps) return;
-  const batch = appNodes.slice(revealedApps, target);
-  const delayMult = Math.min(4, 90 / batch.length); // cap full reveal to ~1.5s
-  batch.forEach((n, i) => {
-    n.targetOp    = 0.88;
-    n.spawnDelay  = Math.floor(i * delayMult);
-    n.errored     = false;
-  });
-  revealedApps = target;
-}
-
-function crashAppNodes() {
-  appNodes.slice(0, revealedApps).forEach(n => {
-    n.errored   = true;
-    n.targetOp  = 0.30;
-    n.spawnDelay = 0;
-  });
-}
-
 // ─── State ────────────────────────────────────────────────────────────────────
-let step           = 0;
-const MAX_STEPS    = 8;
-let particles      = [];
-let burstParticles = [];
-let burstFired     = false;
-let frozen         = false;
-let flashAlpha     = 0;
-let t              = 0;
-let pulse          = 0;
+let step       = 0;
+const MAX_STEPS = 7; // 0–6
+let particles  = [];
+let frozen     = false;
+let t          = 0;
+let pulse      = 0;
+let serverPulse = 0;  // spikes when API server "updates" at step 5
 
-// ─── Stream Particle ─────────────────────────────────────────────────────────
+// ─── Particle ──────────────────────────────────────────────────────────────────
 class Particle {
   constructor(from, to, col) {
     this.from = from; this.to = to; this.col = col;
     this.p    = 0;
     this.spd  = 0.007 + Math.random() * 0.004;
     this.r    = 2.0 + Math.random() * 1.4;
-    this.bow  = { x:(Math.random()-.5)*0.06, y:(Math.random()-.5)*0.04 };
+    this.bow  = { x:(Math.random()-.5)*.08, y:(Math.random()-.5)*.06 };
     this.alive = true;
   }
   pos() {
-    const f = NODES[this.from], t2 = NODES[this.to];
+    const f=NODES[this.from], t2=NODES[this.to];
     const fx=f.rx*W, fy=f.ry*H, tx=t2.rx*W, ty=t2.ry*H;
     const cx=(fx+tx)/2+this.bow.x*Math.min(W,H);
     const cy=(fy+ty)/2+this.bow.y*Math.min(W,H);
@@ -265,105 +224,87 @@ class Particle {
     return { x:u*u*fx+2*u*this.p*cx+this.p*this.p*tx,
              y:u*u*fy+2*u*this.p*cy+this.p*this.p*ty };
   }
-  update() { this.p += this.spd; if (this.p >= 1) this.alive = false; }
+  update() { this.p+=this.spd; if(this.p>=1) this.alive=false; }
   draw() {
-    const {x,y} = this.pos();
-    const alpha = Math.sin(this.p * Math.PI);
+    const {x,y}=this.pos();
+    const alpha=Math.sin(this.p*Math.PI);
     ctx.save();
-    ctx.globalAlpha = alpha * 0.35;
-    ctx.fillStyle = this.col; ctx.shadowColor = this.col; ctx.shadowBlur = 14;
-    ctx.beginPath(); ctx.arc(x, y, this.r*2.5, 0, Math.PI*2); ctx.fill();
-    ctx.globalAlpha = alpha * 0.92; ctx.shadowBlur = 4;
-    ctx.beginPath(); ctx.arc(x, y, this.r, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha=alpha*0.35;
+    ctx.fillStyle=this.col; ctx.shadowColor=this.col; ctx.shadowBlur=14;
+    ctx.beginPath(); ctx.arc(x,y,this.r*2.5,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha=alpha*0.92; ctx.shadowBlur=4;
+    ctx.beginPath(); ctx.arc(x,y,this.r,0,Math.PI*2); ctx.fill();
     ctx.restore();
   }
 }
 
-// ─── Burst Particle ───────────────────────────────────────────────────────────
-class BurstParticle {
-  constructor(x, y) {
-    const angle = Math.random() * Math.PI * 2;
-    const spd   = 1.5 + Math.random() * 5.5;
-    this.x = x; this.y = y;
-    this.vx = Math.cos(angle) * spd;
-    this.vy = Math.sin(angle) * spd;
-    this.life  = 1.0;
-    this.decay = 0.012 + Math.random() * 0.010;
-    this.r     = 1.5 + Math.random() * 3.5;
-    this.col   = Math.random() > 0.55 ? '#EF4444' : '#FCA5A5';
-  }
-  update() {
-    this.x += this.vx; this.y += this.vy;
-    this.vy += 0.06;
-    this.vx *= 0.98; this.vy *= 0.98;
-    this.life -= this.decay;
-    return this.life > 0;
-  }
-  draw() {
-    ctx.save();
-    ctx.globalAlpha = this.life * 0.85;
-    ctx.fillStyle   = this.col;
-    ctx.shadowColor = this.col; ctx.shadowBlur = 6;
-    ctx.beginPath(); ctx.arc(this.x, this.y, this.r, 0, Math.PI*2); ctx.fill();
-    ctx.restore();
-  }
-}
-
-// ─── Colour helpers ───────────────────────────────────────────────────────────
-function lerpColor(a, b, f) {
-  const cl = Math.max(0, Math.min(1, f));
-  return [ Math.round(a[0]+(b[0]-a[0])*cl), Math.round(a[1]+(b[1]-a[1])*cl), Math.round(a[2]+(b[2]-a[2])*cl) ];
-}
-function platformStressLevel() {
-  if (step <= 3) return 0;
-  if (step === 4) return 0.42;
-  if (step === 5) return 0.86;
-  return 1.0;
-}
-function stressColorRGB() {
-  const s = platformStressLevel();
-  if (s < 0.4) return lerpColor([74,222,128],[251,191,36], s/0.4);
-  return lerpColor([251,191,36],[239,68,68], (s-0.4)/0.6);
-}
-function responseParticleColor() {
-  const c = stressColorRGB(); return `rgb(${c[0]},${c[1]},${c[2]})`;
-}
+// ─── Particle colour ───────────────────────────────────────────────────────────
 function pColor(from, to) {
-  if (from === 'platform' && to === 'appsets') return responseParticleColor();
+  if (from==='appset'    && to==='apiserver') return '#60A5FA'; // poll: blue
+  if (from==='apiserver' && to==='appset')    return '#F59E0B'; // response: amber
+  if (from==='appset'    && to.startsWith('app')) return '#A78BFA'; // creation: violet
+  if (to==='dc1'||to==='dc2'||to==='dc3'||to==='dc4'||to==='dc5') return '#4ADE80'; // reconcile: green
   return '#60A5FA';
 }
+
+// ─── Spawn logic — step-aware ──────────────────────────────────────────────────
 function spawnProbFor(c) {
   if (frozen || step === 0 || step >= 6) return 0;
-  const isPoll = c.from==='appsets'  && c.to==='platform';
-  const isResp = c.from==='platform' && c.to==='appsets';
-  const pollP = [0,0.012,0.015,0.022,0.030,0.040][Math.min(step,5)];
-  const respP = [0,0.015,0.020,0.030,0.050,0.075][Math.min(step,5)];
-  if (isPoll) return pollP;
-  if (isResp) return respP;
+  const isPoll     = c.from==='appset'    && c.to==='apiserver';
+  const isResponse = c.from==='apiserver' && c.to==='appset';
+  const isCreation = c.from==='appset'    && c.to.startsWith('app');
+  const isReconcile= c.to.startsWith('dc');
+
+  if (step === 1) return isPoll ? 0.028 : 0;
+  if (step === 2) {
+    if (isResponse) return 0.028;
+    if (isPoll)     return 0.006;
+    return 0;
+  }
+  if (step === 3) {
+    if (isCreation) return 0.030;  // burst: appset creates apps
+    if (isResponse||isPoll) return 0.005;
+    return 0;
+  }
+  if (step === 4) {
+    if (isReconcile) return 0.020;
+    if (isCreation)  return 0.006; // trickle: appset still owns apps
+    if (isResponse||isPoll) return 0.004;
+    return 0;
+  }
+  if (step === 5) {
+    if (isReconcile) return 0.020;
+    if (isCreation)  return 0.022; // new apps being created
+    if (isResponse)  return 0.014;
+    if (isPoll)      return 0.008;
+    return 0;
+  }
   return 0;
 }
+
 function maybeSpawn() {
   CONNS.forEach(c => {
     if (c.step > step) return;
-    const fo=opacity[c.from]||0, to2=opacity[c.to]||0;
-    if (fo<0.35||to2<0.35) return;
-    const prob=spawnProbFor(c);
-    if (prob && Math.random()<prob) particles.push(new Particle(c.from,c.to,pColor(c.from,c.to)));
+    const fo=opacity[c.from]||0, to=opacity[c.to]||0;
+    if (fo<0.35||to<0.35) return;
+    const prob = spawnProbFor(c);
+    if (prob && Math.random()<prob)
+      particles.push(new Particle(c.from, c.to, pColor(c.from, c.to)));
   });
 }
 
-// ─── Opacity ──────────────────────────────────────────────────────────────────
+// ─── Opacity targets ──────────────────────────────────────────────────────────
 function opTarget(key) {
-  const n = NODES[key];
+  const n=NODES[key];
   if (n.step > step) return 0;
-  if (step >= 7) return 0.12;
+  if (step >= 6) return 0.12;
   return 1;
 }
 function updateOpacity() {
   Object.keys(NODES).forEach(k => { opacity[k]+=(opTarget(k)-opacity[k])*0.028; });
 }
 
-// ─── Rounded rect ─────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 function rr(x,y,w,h,r) {
   ctx.beginPath();
   ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
@@ -373,80 +314,99 @@ function rr(x,y,w,h,r) {
   ctx.closePath();
 }
 
+// Pill label with monospace text
+function drawPill(text, x, y, col, alpha) {
+  if (alpha < 0.02) return;
+  ctx.save();
+  ctx.font = '500 10.5px "Courier New",Courier,monospace';
+  const tw = ctx.measureText(text).width;
+  const pw = tw + 18, ph = 22;
+  ctx.globalAlpha = alpha * 0.90;
+  ctx.fillStyle = 'rgba(6,10,20,0.92)';
+  rr(x - pw/2, y - ph/2, pw, ph, 5); ctx.fill();
+  ctx.strokeStyle = `${col}66`; ctx.lineWidth = 1;
+  rr(x - pw/2, y - ph/2, pw, ph, 5); ctx.stroke();
+  ctx.fillStyle = col;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
 // ─── Background ───────────────────────────────────────────────────────────────
 function drawBg() {
   ctx.fillStyle='#080B12'; ctx.fillRect(0,0,W,H);
-  if (flashAlpha > 0) {
-    ctx.save(); ctx.globalAlpha=flashAlpha;
-    ctx.fillStyle='#EF4444'; ctx.fillRect(0,0,W,H);
-    ctx.restore();
-    flashAlpha = Math.max(0, flashAlpha - 0.007);
-  } else {
-    const gx=0.50*W,gy=0.50*H,gr=Math.min(W,H)*0.55;
-    const g=ctx.createRadialGradient(gx,gy,0,gx,gy,gr);
-    g.addColorStop(0,'rgba(5,18,45,0.12)');
-    g.addColorStop(0.5,'rgba(3,10,28,0.05)');
-    g.addColorStop(1,'rgba(0,0,0,0)');
-    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
-  }
+  // Subtle blue glow around ArgoCD box
+  const gx=0.50*W, gy=0.50*H, gr=Math.min(W,H)*0.52;
+  const g=ctx.createRadialGradient(gx,gy,0,gx,gy,gr);
+  g.addColorStop(0,'rgba(5,20,50,0.14)');
+  g.addColorStop(0.5,'rgba(3,12,30,0.06)');
+  g.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
 }
 
-// ─── Managed ArgoCD box ───────────────────────────────────────────────────────
-function drawManagedArgoBox() {
+// ─── ArgoCD box ───────────────────────────────────────────────────────────────
+function drawArgoBox() {
   const bx=BOX.x1*W, by=BOX.y1*H;
   const bw=(BOX.x2-BOX.x1)*W, bh=(BOX.y2-BOX.y1)*H;
-  const hdrH=34;
-  const intOp=opacity['appsets']||0;
-  if (intOp<0.01) return;
+  const hdrH = 34; // header band height
+  const intOp=Math.max(opacity.appset||0, opacity.app1||0);
+  if(intOp<0.01) return;
   ctx.save();
-  ctx.globalAlpha=intOp*0.028; ctx.fillStyle='#3B82F6'; rr(bx,by,bw,bh,18); ctx.fill();
-  ctx.globalAlpha=intOp*0.11; ctx.fillStyle='#1D4ED8';
+
+  // Subtle body fill
+  ctx.globalAlpha=intOp*0.030;
+  ctx.fillStyle='#3B82F6';
+  rr(bx,by,bw,bh,18); ctx.fill();
+
+  // Header band — top portion filled more prominently
+  ctx.globalAlpha=intOp*0.12;
+  ctx.fillStyle='#1D4ED8';
+  // Clip to top-rounded only: draw a path covering top corners + rect body
   ctx.beginPath();
-  ctx.moveTo(bx+18,by); ctx.lineTo(bx+bw-18,by);
-  ctx.quadraticCurveTo(bx+bw,by,bx+bw,by+18);
-  ctx.lineTo(bx+bw,by+hdrH); ctx.lineTo(bx,by+hdrH);
-  ctx.lineTo(bx,by+18); ctx.quadraticCurveTo(bx,by,bx+18,by);
-  ctx.closePath(); ctx.fill();
-  ctx.globalAlpha=intOp*0.20; ctx.strokeStyle='rgba(96,165,250,0.5)'; ctx.lineWidth=1;
-  ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(bx+1,by+hdrH); ctx.lineTo(bx+bw-1,by+hdrH); ctx.stroke();
-  ctx.globalAlpha=intOp*0.32; ctx.strokeStyle='rgba(96,165,250,0.60)'; ctx.lineWidth=1.5;
-  ctx.setLineDash([8,12]); rr(bx,by,bw,bh,18); ctx.stroke();
+  ctx.moveTo(bx+18, by);
+  ctx.lineTo(bx+bw-18, by);
+  ctx.quadraticCurveTo(bx+bw, by, bx+bw, by+18);
+  ctx.lineTo(bx+bw, by+hdrH);
+  ctx.lineTo(bx, by+hdrH);
+  ctx.lineTo(bx, by+18);
+  ctx.quadraticCurveTo(bx, by, bx+18, by);
+  ctx.closePath();
+  ctx.fill();
+
+  // Separator line below header
+  ctx.globalAlpha=intOp*0.20;
+  ctx.strokeStyle='rgba(96,165,250,0.5)'; ctx.lineWidth=1;
   ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(bx+1, by+hdrH); ctx.lineTo(bx+bw-1, by+hdrH);
+  ctx.stroke();
+
+  // Full box border (dashed)
+  ctx.globalAlpha=intOp*0.32;
+  ctx.strokeStyle='rgba(96,165,250,0.60)'; ctx.lineWidth=1.5;
+  ctx.setLineDash([8,12]);
+  rr(bx,by,bw,bh,18); ctx.stroke();
+  ctx.setLineDash([]);
+
   ctx.restore();
-  drawArgoLabel(bx+bw/2, by+hdrH/2, 'Managed ArgoCD', '700 14px Inter,sans-serif', '#93C5FD', intOp*0.80, 15);
+  // Header label — ArgoCD icon + text centred as a unit
+  drawArgoLabel(bx+bw/2, by+hdrH/2, 'ArgoCD', '700 14px Inter,sans-serif', '#93C5FD', intOp*0.80, 15);
 }
 
-// ─── Fan lines: AppSets → each visible App ────────────────────────────────────
-function drawAppFanLines() {
-  const appOp = opacity.appsets || 0;
-  if (appOp < 0.05) return;
-  const ax = NODES.appsets.rx * W;
-  const ay = NODES.appsets.ry * H + 35; // below AppSets node
-  appNodes.forEach(n => {
-    if (n.op < 0.02) return;
-    const tx = n.rx * W, ty = n.ry * H - 11;
-    ctx.save();
-    ctx.globalAlpha = n.op * appOp * 0.13;
-    ctx.strokeStyle = n.errored ? '#EF4444' : '#A78BFA';
-    ctx.lineWidth = 0.8;
-    ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(tx, ty); ctx.stroke();
-    ctx.restore();
-  });
-}
-
-// ─── Particle connection lines (animated dashes) ──────────────────────────────
+// ─── Connection lines ──────────────────────────────────────────────────────────
 function drawLines() {
-  const drawn = new Set();
+  const drawn=new Set();
   CONNS.forEach(c => {
-    if (c.step > step) return;
+    if(c.step>step) return;
     const key=[c.from,c.to].sort().join('|');
-    if (drawn.has(key)) return; drawn.add(key);
+    if(drawn.has(key)) return; drawn.add(key);
     const fo=opacity[c.from]||0, to2=opacity[c.to]||0;
     const lo=Math.min(fo,to2); if(lo<0.04) return;
     ctx.save();
-    ctx.globalAlpha=lo*0.20; ctx.strokeStyle='rgba(80,140,210,0.5)';
+    ctx.globalAlpha=lo*0.22;
+    ctx.strokeStyle='rgba(80,140,210,0.5)';
     ctx.lineWidth=1; ctx.setLineDash([4,10]);
-    ctx.lineDashOffset=-(t*0.26);
+    ctx.lineDashOffset=-(t*0.28);
     ctx.beginPath();
     ctx.moveTo(NODES[c.from].rx*W,NODES[c.from].ry*H);
     ctx.lineTo(NODES[c.to].rx*W,  NODES[c.to].ry*H);
@@ -455,225 +415,223 @@ function drawLines() {
   });
 }
 
-// ─── Node sizes ───────────────────────────────────────────────────────────────
-function sz(type) {
-  return { platform:[172,58], appsets:[190,70], cp:[138,56] }[type]||[140,52];
+// ─── Arrow annotation labels ───────────────────────────────────────────────────
+function drawArrowLabels() {
+  const ax=NODES.apiserver.rx*W, ay=NODES.apiserver.ry*H;
+  const sx=NODES.appset.rx*W,    sy=NODES.appset.ry*H;
+  const mx=(ax+sx)/2, my=(ay+sy)/2;
+  // Offset labels to right of the vertical arrow
+  const ox = Math.min(W*0.16, 135);
+
+  // POST request label — visible step 1+
+  const reqAlpha = step>=1 ? Math.min(opacity.apiserver, 1) : 0;
+  if(reqAlpha>0.02)
+    drawPill('POST  /api/v1/getparams.execute', mx+ox, my-14, '#60A5FA', reqAlpha*(step===1?1:0.45));
+
+  // Response label — visible step 2+
+  const resAlpha = step>=2 ? Math.min(opacity.apiserver, 1) : 0;
+  if(resAlpha>0.02)
+    drawPill('[{name, cluster, env…}, …]', mx+ox, my+14, '#F59E0B', resAlpha);
 }
 
-// ─── Platform Service ─────────────────────────────────────────────────────────
-function drawPlatform(x, y, op) {
-  const crashed = step >= 6;
-  const [w,h] = sz('platform');
-  const shakeX = (step===5) ? Math.sin(t*1.1)*4 : 0;
-  const px = x+shakeX-w/2, py = y-h/2;
-  const col    = crashed ? [120,20,20] : stressColorRGB();
-  const colStr = `rgb(${col[0]},${col[1]},${col[2]})`;
-  const glowStr= `rgba(${col[0]},${col[1]},${col[2]},${crashed?0.30:0.45})`;
-  const bl     = crashed ? 6 : (16+Math.sin(pulse*0.7)*4+platformStressLevel()*18);
+// ─── "New data" badge on API server (step 5) ──────────────────────────────────
+function drawNewDataBadge() {
+  if(serverPulse<0.02) return;
+  const x=NODES.apiserver.rx*W, y=NODES.apiserver.ry*H;
+  ctx.save();
+  ctx.globalAlpha=serverPulse*0.9;
+  ctx.fillStyle='#4ADE80'; ctx.font='600 10px Inter,sans-serif';
+  ctx.textAlign='left'; ctx.textBaseline='middle';
+  ctx.shadowColor='#4ADE80'; ctx.shadowBlur=10;
+  ctx.fillText('● data updated', x+80, y-4);
+  ctx.restore();
+}
+
+// ─── Node draw functions ───────────────────────────────────────────────────────
+function sz(type) {
+  return { apiserver:[152,54], appset:[170,64], genapp:[114,40], cluster:[120,48] }[type] || [130,50];
+}
+
+function drawAPIServer(x,y,op) {
+  const [w,h]=sz('apiserver'), px=x-w/2, py=y-h/2;
+  const sp=serverPulse;
+  const bl=16+sp*20+Math.sin(pulse*0.7)*4;
   ctx.save(); ctx.globalAlpha=op;
-  ctx.shadowColor=glowStr; ctx.shadowBlur=bl;
-  ctx.fillStyle=crashed?'rgba(22,4,4,0.97)':'rgba(4,18,12,0.97)';
-  rr(px,py,w,h,10); ctx.fill();
+  ctx.shadowColor=sp>0.1?'rgba(74,222,128,0.55)':'rgba(96,165,250,0.40)';
+  ctx.shadowBlur=bl;
+  ctx.fillStyle='rgba(6,18,45,0.97)'; rr(px,py,w,h,10); ctx.fill();
   ctx.shadowBlur=0;
-  ctx.strokeStyle=crashed?'#7F1D1D':colStr; ctx.lineWidth=crashed?2:1.5;
-  rr(px,py,w,h,10); ctx.stroke();
+  ctx.strokeStyle=sp>0.1?`rgba(74,222,128,${0.5+sp*0.5})`:'rgba(96,165,250,0.68)';
+  ctx.lineWidth=1.5; rr(px,py,w,h,10); ctx.stroke();
+  ctx.fillStyle='#93C5FD'; ctx.font='600 13px Inter,sans-serif';
   ctx.textAlign='center'; ctx.textBaseline='middle';
-  if (crashed) {
-    ctx.fillStyle='#FCA5A5'; ctx.font='700 13px Inter,sans-serif';
-    ctx.fillText('✕  Platform Service', x+shakeX, y-7);
-    ctx.fillStyle='rgba(252,165,165,0.55)'; ctx.font='500 10px Inter,sans-serif';
-    ctx.fillText('OOMKilled — pod terminated', x+shakeX, y+7);
-  } else {
-    ctx.fillStyle=colStr; ctx.font='600 13px Inter,sans-serif';
-    ctx.fillText('Platform Service', x+shakeX, y-7);
-    ctx.fillStyle=`rgba(${col[0]},${col[1]},${col[2]},0.50)`; ctx.font='500 10px Inter,sans-serif';
-    ctx.fillText('Spring Boot — plugin generator', x+shakeX, y+7);
+  ctx.fillText('API Server',x,y-6);
+  ctx.fillStyle='rgba(147,197,253,0.48)'; ctx.font='500 10px Inter,sans-serif';
+  ctx.fillText('Returns parameter sets',x,y+7);
+  ctx.restore();
+}
+
+function drawAppSet(x,y,op) {
+  const [w,h]=sz('appset'), px=x-w/2, py=y-h/2;
+  const bl=18+Math.sin(pulse*0.8)*5;
+  ctx.save(); ctx.globalAlpha=op;
+  ctx.shadowColor='rgba(167,139,250,0.50)'; ctx.shadowBlur=bl;
+  ctx.fillStyle='rgba(14,8,32,0.97)'; rr(px,py,w,h,12); ctx.fill();
+  ctx.shadowBlur=0; ctx.strokeStyle='rgba(139,92,246,0.75)'; ctx.lineWidth=2;
+  rr(px,py,w,h,12); ctx.stroke();
+  ctx.fillStyle='#C4B5FD'; ctx.font='700 14px Inter,sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('ApplicationSet',x,y-8);
+  ctx.fillStyle='rgba(196,181,253,0.50)'; ctx.font='500 10.5px Inter,sans-serif';
+  ctx.fillText('Plugin Generator',x,y+8);
+  ctx.restore();
+}
+
+function drawGenApp(x,y,op) {
+  const [w,h]=sz('genapp'), px=x-w/2, py=y-h/2;
+  ctx.save(); ctx.globalAlpha=op;
+  ctx.shadowColor='rgba(52,211,153,0.35)'; ctx.shadowBlur=12;
+  ctx.fillStyle='rgba(3,18,12,0.96)'; rr(px,py,w,h,8); ctx.fill();
+  ctx.shadowBlur=0; ctx.strokeStyle='rgba(52,211,153,0.60)'; ctx.lineWidth=1;
+  rr(px,py,w,h,8); ctx.stroke();
+  ctx.fillStyle='#6EE7B7'; ctx.font='500 11px Inter,sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('Application',x,y);
+  ctx.restore();
+}
+
+function drawCluster(x,y,op) {
+  const [w,h]=sz('cluster'), px=x-w/2, py=y-h/2;
+  ctx.save(); ctx.globalAlpha=op;
+  ctx.shadowColor='rgba(59,130,246,0.38)'; ctx.shadowBlur=12;
+  ctx.fillStyle='rgba(6,15,40,0.96)'; rr(px,py,w,h,9); ctx.fill();
+  ctx.shadowBlur=0; ctx.strokeStyle='rgba(59,130,246,0.62)'; ctx.lineWidth=1;
+  rr(px,py,w,h,9); ctx.stroke();
+  ctx.fillStyle='rgba(147,197,253,0.85)'; ctx.font='500 11px Inter,sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('K8s Cluster',x,py+15);
+  const nd=3, sp2=11, sx2=x-((nd-1)*sp2)/2, dy=py+h-13;
+  for(let i=0;i<nd;i++){
+    ctx.fillStyle='rgba(96,165,250,0.72)'; ctx.shadowColor='rgba(96,165,250,0.4)'; ctx.shadowBlur=3;
+    ctx.beginPath(); ctx.arc(sx2+i*sp2,dy,2.8,0,Math.PI*2); ctx.fill();
   }
   ctx.restore();
 }
 
-// ─── ApplicationSets ──────────────────────────────────────────────────────────
-function drawAppSets(x, y, op) {
-  const [w,h]=sz('appsets'), px=x-w/2, py=y-h/2;
-  const bl=20+Math.sin(pulse*0.8)*6;
-  ctx.save(); ctx.globalAlpha=op;
-  ctx.shadowColor='rgba(167,139,250,0.55)'; ctx.shadowBlur=bl;
-  ctx.fillStyle='rgba(14,8,32,0.97)'; rr(px,py,w,h,14); ctx.fill();
-  ctx.shadowBlur=0;
-  ctx.strokeStyle='rgba(139,92,246,0.80)'; ctx.lineWidth=2;
-  rr(px,py,w,h,14); ctx.stroke();
-  ctx.fillStyle='rgba(196,181,253,0.48)'; ctx.font='500 10px Inter,sans-serif';
-  ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText('→ Platform Service for params', x, y+9);
-  ctx.restore();
-  drawArgoLabel(x, y-9, 'ApplicationSets', '700 14px Inter,sans-serif', '#C4B5FD', op, 15);
-}
-
-// ─── Control Plane ────────────────────────────────────────────────────────────
-function drawCP(x, y, op, label) {
-  const [w,h]=sz('cp'), px=x-w/2, py=y-h/2;
-  const crashed = step >= 6;
-  const bl=14+Math.sin(pulse*0.65)*4;
-  ctx.save(); ctx.globalAlpha=op;
-  ctx.shadowColor=crashed?'rgba(127,29,29,0.40)':'rgba(56,189,248,0.45)'; ctx.shadowBlur=crashed?4:bl;
-  ctx.fillStyle='rgba(4,14,28,0.97)'; rr(px,py,w,h,10); ctx.fill();
-  ctx.shadowBlur=0;
-  ctx.strokeStyle=crashed?'rgba(127,29,29,0.55)':'rgba(56,189,248,0.68)'; ctx.lineWidth=1.5;
-  rr(px,py,w,h,10); ctx.stroke();
-  ctx.fillStyle=crashed?'rgba(252,165,165,0.40)':'rgba(125,211,252,0.45)';
-  ctx.font='500 10.5px Inter,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText('ArgoCD', x, y+8);
-  ctx.restore();
-  drawArgoLabel(x, y-7, label, '700 14px Inter,sans-serif',
-    crashed?'#FCA5A5':'#7DD3FC', op, 13);
-}
-
-// ─── Draw all nodes ───────────────────────────────────────────────────────────
 function drawNodes() {
   Object.entries(NODES).forEach(([k,n]) => {
     const op=opacity[k]; if(op<0.01) return;
     const x=n.rx*W, y=n.ry*H;
-    switch(n.type) {
-      case 'platform': drawPlatform(x,y,op); break;
-      case 'appsets':  drawAppSets(x,y,op);  break;
-      case 'cp':       drawCP(x,y,op,n.label); break;
+    switch(n.type){
+      case 'apiserver': drawAPIServer(x,y,op); break;
+      case 'appset':    drawAppSet(x,y,op); break;
+      case 'genapp':    drawGenApp(x,y,op); break;
+      case 'cluster':   drawCluster(x,y,op); break;
     }
   });
 }
 
 // ─── Step labels ──────────────────────────────────────────────────────────────
 const LABELS = [
-  'One ApplicationSet — all apps, all clusters, no limits',
-  'Managed ArgoCD polls Platform Service for the full application list',
-  '3 apps registered — small payload, everything works fine',
-  'Adoption grows — more teams onboard, more apps registered',
-  'Response payload hits 98 KB and climbing — every poll cycle',
-  '25 applications — a bloated payload on every single poll',
-  '❌  OutOfMemoryError — ApplicationSet controller pod terminated',
+  'ApplicationSet Plugin Generator — how it works',
+  'ArgoCD polls your API server periodically',
+  'Your API returns a list of parameter sets',
+  'One Application is created per parameter set',
+  'Each Application reconciles to its destination cluster',
+  'API data changes → ArgoCD adapts on the next poll',
   '',
 ];
+
 const stepLabelEl = document.getElementById('step-label');
 function updateStepLabel() {
-  stepLabelEl.textContent = step < 7 ? LABELS[step] : '';
-  stepLabelEl.className   = step === 6 ? 'error' : '';
+  stepLabelEl.textContent = step < 6 ? LABELS[step] : '';
 }
 
-// ─── Narrative ────────────────────────────────────────────────────────────────
-const narrativeEl = document.getElementById('narrative');
-const narTitle    = document.getElementById('nar-title');
-const narSub      = document.getElementById('nar-sub');
+// ─── Narrative & Legend ───────────────────────────────────────────────────────
+const narrativeEl=document.getElementById('narrative');
+const narTitle=document.getElementById('nar-title');
+const narSub=document.getElementById('nar-sub');
+const legendEl=document.getElementById('legend');
+
 function updateNarrative() {
-  if (step === 7) {
-    narTitle.textContent = 'One ApplicationSet. Every app. Every cluster.';
-    narSub.textContent   = 'As the platform grows — the poll fails.';
+  if(step===6){
+    narTitle.textContent='Your API is the source of truth.';
+    narSub.textContent  ='ArgoCD is the executor.';
     narrativeEl.classList.add('visible');
   } else {
     narrativeEl.classList.remove('visible');
   }
 }
-
-// ─── Response counter ─────────────────────────────────────────────────────────
-const RC_STATES = {
-  2: { apps:'3',    resp:'~2 KB',         col:'#4ADE80', icon:'' },
-  3: { apps:'8',    resp:'~6 KB',          col:'#4ADE80', icon:'' },
-  4: { apps:'15',   resp:'~98 KB',         col:'#FCD34D', icon:'  ⚠' },
-  5: { apps:'25',   resp:'~512 KB',        col:'#F87171', icon:'  🔴' },
-  6: { apps:'25',   resp:'OUT OF MEMORY',  col:'#EF4444', icon:'  💥' },
-};
-const rcEl     = document.getElementById('response-counter');
-const rcAppsEl = document.getElementById('rc-apps');
-const rcRespEl = document.getElementById('rc-resp');
-function updateResponseCounter() {
-  const state = RC_STATES[step];
-  if (!state) { rcEl.style.opacity='0'; return; }
-  rcEl.style.opacity   = '1';
-  rcAppsEl.style.color = state.col;
-  rcAppsEl.textContent = `Applications : ${state.apps}`;
-  rcRespEl.style.color = state.col;
-  rcRespEl.textContent = `Response     : ${state.resp}${state.icon}`;
+function updateLegend() {
+  legendEl.style.opacity=(step>=1&&step<=5)?'1':'0';
 }
 
 // ─── Progress dots ────────────────────────────────────────────────────────────
-const progressEl = document.getElementById('progress');
-for (let i=0;i<MAX_STEPS;i++) {
+const progressEl=document.getElementById('progress');
+for(let i=0;i<MAX_STEPS;i++){
   const d=document.createElement('div');
   d.className='dot'; d.id='dot'+i; progressEl.appendChild(d);
 }
-function updateDots() {
+function updateDots(){
   for(let i=0;i<MAX_STEPS;i++)
     document.getElementById('dot'+i).className='dot'+(i===step?' active':'');
 }
 
-// ─── On step enter ────────────────────────────────────────────────────────────
-function onStepEnter(s) {
-  revealAppsForStep(s);
-  if (s === 6) {
-    frozen=true; particles=[];
-    crashAppNodes();
-    flashAlpha=0.42;
-    if (!burstFired) {
-      const bx2=NODES.platform.rx*W, by2=NODES.platform.ry*H;
-      for (let i=0;i<90;i++) burstParticles.push(new BurstParticle(bx2,by2));
-      burstFired=true;
-    }
-  }
-  if (s===7) { frozen=true; particles=[]; burstParticles=[]; }
-}
-
-// ─── Advance / keyboard ───────────────────────────────────────────────────────
-const hintEl = document.getElementById('hint');
+// ─── Step advance ─────────────────────────────────────────────────────────────
+const hintEl=document.getElementById('hint');
 let hintTimer;
-function advance() {
-  if (step>=MAX_STEPS-1) return;
+function advance(){
+  if(step>=MAX_STEPS-1){ window.parent.postMessage({type:'scene-complete'},'*'); return; }
+  const prev=step;
   step++;
-  onStepEnter(step);
-  updateDots(); updateNarrative(); updateResponseCounter(); updateStepLabel();
+  // Spike API server pulse when data "changes" at step 5
+  if(prev===4&&step===5) serverPulse=1.0;
+  if(step>=6){frozen=true; particles=[];}
+  updateDots(); updateNarrative(); updateLegend(); updateStepLabel();
   hintEl.classList.remove('hidden');
   clearTimeout(hintTimer);
   hintTimer=setTimeout(()=>hintEl.classList.add('hidden'),3000);
 }
 document.addEventListener('click', advance);
-document.addEventListener('keydown', e => {
-  if (e.code==='Space'||e.code==='ArrowRight') { e.preventDefault(); advance(); return; }
-  if (e.code==='ArrowLeft'&&step>0) {
+document.addEventListener('keydown', e=>{
+  if(e.code==='Space'||e.code==='ArrowRight'){e.preventDefault(); advance();}
+  if(e.code==='ArrowLeft'&&step===0){window.parent.postMessage({type:'scene-back'},'*');return;}
+  if(e.code==='ArrowLeft'&&step>0){
     step--;
     frozen=step>=6;
-    if (!frozen) { particles=[]; burstParticles=[]; flashAlpha=0; }
-    burstFired=step>=6;
-    const target=STEP_APP_COUNTS[Math.min(step,STEP_APP_COUNTS.length-1)];
-    revealedApps=target;
-    const isCrash=(step===6);
-    appNodes.forEach((n,i)=>{
-      if (i<target) { n.errored=isCrash; n.targetOp=isCrash?0.30:0.88; }
-      else { n.targetOp=0; n.errored=false; }
-    });
-    updateDots(); updateNarrative(); updateResponseCounter(); updateStepLabel();
+    if(!frozen) particles=[];
+    serverPulse=0;
+    updateDots(); updateNarrative(); updateLegend(); updateStepLabel();
   }
 });
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
-function loop() {
+function loop(){
   requestAnimationFrame(loop);
   t++; pulse+=0.038;
+  // Decay server pulse
+  serverPulse*=0.975;
   updateOpacity();
-  appNodes.forEach(n=>n.update());
-  if (!frozen) maybeSpawn();
-  particles      = particles.filter(p=>{p.update();return p.alive;});
-  burstParticles = burstParticles.filter(b=>b.update());
+  maybeSpawn();
+  particles=particles.filter(p=>{p.update(); return p.alive;});
   drawBg();
-  drawManagedArgoBox();
+  drawArgoBox();
   drawLines();
-  appNodes.forEach(n=>n.drawToCP());
-  drawAppFanLines();
   particles.forEach(p=>p.draw());
-  burstParticles.forEach(b=>b.draw());
-  appNodes.forEach(n=>n.draw());
   drawNodes();
+  drawArrowLabels();
+  drawNewDataBadge();
 }
 
-updateDots(); updateNarrative(); updateResponseCounter(); updateStepLabel();
+updateDots(); updateNarrative(); updateLegend(); updateStepLabel();
 setTimeout(()=>hintEl.classList.add('hidden'),4000);
 loop();
+
+// ── ArrowUp = prev scene, ArrowDown = next scene ─────────────────────────────
+document.addEventListener('keydown', function(e) {
+  if (e.code === 'ArrowUp')   { e.preventDefault(); window.parent.postMessage({type:'scene-back'},'*'); }
+  if (e.code === 'ArrowDown') { e.preventDefault(); window.parent.postMessage({type:'scene-complete'},'*'); }
+}, true);
 </script>
 </body>
 </html>

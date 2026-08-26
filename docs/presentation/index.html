@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Managed ArgoCD Platform</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    * { margin:0; padding:0; box-sizing:border-box; }
+    html, body { width:100%; height:100%; background:#080B12; overflow:hidden; }
+
+    iframe {
+      position:fixed; inset:0;
+      width:100%; height:100%;
+      border:none; display:block;
+    }
+
+    /* ── Scene navigation dots (bottom-right) ── */
+    #scene-nav {
+      position:fixed; bottom:12px; right:28px;
+      display:flex; gap:7px; align-items:center;
+      z-index:1000;
+    }
+    .sdot {
+      width:5px; height:5px; border-radius:50%;
+      background:rgba(255,255,255,0.16);
+      cursor:pointer; transition:all 0.3s ease;
+      border:none; outline:none; padding:0;
+      position:relative;
+    }
+    .sdot::after {
+      content:attr(data-label);
+      position:absolute; bottom:16px; left:50%;
+      transform:translateX(-50%);
+      background:rgba(0,0,0,0.75); color:#fff;
+      font-family:'Inter',sans-serif; font-size:10px;
+      padding:2px 6px; border-radius:4px;
+      white-space:nowrap; opacity:0; pointer-events:none;
+      transition:opacity 0.2s;
+    }
+    .sdot:hover::after { opacity:1; }
+    .sdot:hover { background:rgba(255,255,255,0.45); transform:scale(1.3); }
+    .sdot.active { background:rgba(255,255,255,0.80); width:16px; border-radius:3px; }
+    .sdot.visited { background:rgba(255,255,255,0.35); }
+
+    /* ── Black fade overlay for scene transitions ── */
+    #fade {
+      position:fixed; inset:0;
+      background:#080B12;
+      opacity:0; pointer-events:none;
+      z-index:999;
+      transition:opacity 0.35s ease;
+    }
+    #fade.on { opacity:1; pointer-events:all; }
+  </style>
+</head>
+<body>
+
+<iframe id="f" src="scene1.html" allowfullscreen></iframe>
+<nav id="scene-nav" aria-label="Scene navigation"></nav>
+<div id="fade" aria-hidden="true"></div>
+
+<script>
+'use strict';
+
+const SCENE_TITLES = [
+  'Scene 1 / Intro',
+  'Scene 2 / The Opportunity',
+  'Scene 3 / The Scaling Problem',
+  'Scene 4 / Inside ArgoCD',
+  'Scene 5 / Multiple Control Planes',
+  'Scene 6 / Plugin Generator',
+  'Scene 7 / Platform Architecture',
+  'Scene 8 / Git-Driven Infrastructure',
+  'Scene 9 / Cluster & App Lifecycle',
+  'Scene 10 / The Growing Pain',
+  'Scene 11 / Partition the Load',
+  'Scene 12 / The Self-Assembling Hierarchy',
+  'Scene 13 / Event-Driven Regeneration',
+  'Scene 14 / Failover',
+  'Scene 15 / Summary',
+];
+const TOTAL = SCENE_TITLES.length;
+
+let cur      = 1;
+let busy     = false;
+let visited  = new Set([1]);
+
+const iframeEl = document.getElementById('f');
+const fadeEl   = document.getElementById('fade');
+const navEl    = document.getElementById('scene-nav');
+
+// ── Build scene dots ─────────────────────────────────────────────────────────
+for (let i = 1; i <= TOTAL; i++) {
+  const btn = document.createElement('button');
+  btn.className = 'sdot' + (i === 1 ? ' active' : '');
+  btn.id        = 'sd' + i;
+  btn.setAttribute('data-label', SCENE_TITLES[i - 1]);
+  btn.setAttribute('aria-label', SCENE_TITLES[i - 1]);
+  btn.addEventListener('click', () => goTo(i));
+  navEl.appendChild(btn);
+}
+
+function syncDots() {
+  for (let i = 1; i <= TOTAL; i++) {
+    const el = document.getElementById('sd' + i);
+    el.className = 'sdot'
+      + (i === cur    ? ' active'  : '')
+      + (visited.has(i) && i !== cur ? ' visited' : '');
+  }
+}
+
+// ── Scene transition ──────────────────────────────────────────────────────────
+function goTo(n) {
+  if (busy || n < 1 || n > TOTAL || n === cur) return;
+  busy = true;
+
+  // Fade out
+  fadeEl.classList.add('on');
+
+  setTimeout(() => {
+    cur = n;
+    visited.add(n);
+    syncDots();
+    iframeEl.src = 'scene' + n + '.html';
+
+    // Fade in after iframe loads (with fallback timeout)
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      setTimeout(() => {
+        fadeEl.classList.remove('on');
+        setTimeout(() => { busy = false; }, 400);
+      }, 80);
+    };
+
+    iframeEl.onload = finish;
+    setTimeout(finish, 4000); // safety fallback
+  }, 370);
+}
+
+// ── Listen for postMessage from scene iframes ─────────────────────────────────
+window.addEventListener('message', e => {
+  if (!e.data || typeof e.data !== 'object') return;
+  if (e.data.type === 'scene-complete' && cur < TOTAL) goTo(cur + 1);
+  if (e.data.type === 'scene-back'    && cur > 1)     goTo(cur - 1);
+});
+
+// ── Keyboard: number keys 1-7 jump directly to a scene ───────────────────────
+// (active when parent window has focus — i.e. user clicked a nav dot)
+window.addEventListener('keydown', e => {
+  const n = parseInt(e.key);
+  if (n >= 1 && n <= TOTAL) { e.preventDefault(); goTo(n); }
+  if (e.code === 'ArrowUp')   { e.preventDefault(); goTo(cur - 1); }
+  if (e.code === 'ArrowDown') { e.preventDefault(); goTo(cur + 1); }
+});
+</script>
+</body>
+</html>

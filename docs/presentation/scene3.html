@@ -3,102 +3,170 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Scene 3 — Multiple Control Planes</title>
+  <title>Scene 3 — When ArgoCD Becomes the Bottleneck</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-    * { margin:0; padding:0; box-sizing:border-box; }
-    body {
-      background:#080B12; overflow:hidden;
-      width:100vw; height:100vh;
-      font-family:'Inter',-apple-system,sans-serif;
-      cursor:pointer; user-select:none;
-    }
-    canvas { display:block; position:absolute; top:0; left:0; pointer-events:none; }
 
-    #narrative {
-      position:absolute; inset:0;
-      display:flex; flex-direction:column;
-      align-items:center; justify-content:center;
-      pointer-events:none; opacity:0; transition:opacity 1.2s ease;
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #080B12;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      cursor: pointer;
+      user-select: none;
     }
-    #narrative.visible { opacity:1; }
+
+    canvas {
+      display: block;
+      position: absolute;
+      top: 0; left: 0;
+      pointer-events: none;
+    }
+
+    /* ── Narrative overlay ── */
+    #narrative {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 1.2s ease;
+    }
+    #narrative.visible { opacity: 1; }
+
     #nar-title {
-      color:#fff; font-size:clamp(22px,3.2vw,52px);
-      font-weight:700; letter-spacing:-0.025em;
-      text-align:center; line-height:1.15; max-width:820px; padding:0 40px;
+      color: #ffffff;
+      font-size: clamp(22px, 3.2vw, 52px);
+      font-weight: 700;
+      letter-spacing: -0.025em;
+      text-align: center;
+      line-height: 1.15;
+      max-width: 800px;
+      padding: 0 40px;
+      text-shadow: 0 0 60px rgba(239, 100, 80, 0.4);
     }
     #nar-sub {
-      margin-top:14px; color:rgba(255,255,255,0.42);
-      font-size:clamp(13px,1.6vw,20px); text-align:center; padding:0 40px;
+      margin-top: 14px;
+      color: rgba(255, 255, 255, 0.42);
+      font-size: clamp(13px, 1.6vw, 20px);
+      font-weight: 400;
+      text-align: center;
+      padding: 0 40px;
+      letter-spacing: 0.01em;
     }
 
+    /* ── Scene label ── */
     #scene-label {
-      position:absolute; top:28px; left:36px;
-      color:rgba(255,255,255,0.18); font-size:11px;
-      letter-spacing:0.12em; text-transform:uppercase; font-weight:500; pointer-events:none;
+      position: absolute;
+      top: 28px;
+      left: 36px;
+      color: rgba(255,255,255,0.18);
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-weight: 500;
+      pointer-events: none;
     }
 
-    #legend {
-      position:absolute; bottom:68px; right:32px;
-      display:flex; flex-direction:column; gap:7px;
-      opacity:0; transition:opacity 0.8s ease; pointer-events:none;
-    }
-    .leg-row { display:flex; align-items:center; gap:8px; }
-    .leg-line { width:28px; height:3px; border-radius:2px; display:block; }
-    .leg-text { font-size:11px; color:rgba(255,255,255,0.45); font-family:'Inter',sans-serif; letter-spacing:0.04em; }
-
+    /* ── Progress dots ── */
     #progress {
-      position:absolute; bottom:30px; left:50%; transform:translateX(-50%);
-      display:flex; gap:7px; align-items:center; pointer-events:none;
+      position: absolute;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 7px;
+      align-items: center;
+      pointer-events: none;
     }
-    .dot { width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,0.15); transition:all 0.4s ease; }
-    .dot.active { background:rgba(255,255,255,0.75); width:18px; border-radius:3px; }
+    .dot {
+      width: 5px; height: 5px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.15);
+      transition: all 0.4s ease;
+    }
+    .dot.active {
+      background: rgba(255,255,255,0.75);
+      width: 18px;
+      border-radius: 3px;
+    }
 
+    /* ── Click hint ── */
     #hint {
-      position:absolute; bottom:52px; left:50%; transform:translateX(-50%);
-      color:rgba(255,255,255,0.18); font-size:11px; letter-spacing:0.10em;
-      text-transform:uppercase; pointer-events:none; white-space:nowrap; transition:opacity 0.5s;
+      position: absolute;
+      bottom: 52px;
+      left: 50%;
+      transform: translateX(-50%);
+      color: rgba(255,255,255,0.18);
+      font-size: 11px;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+      pointer-events: none;
+      white-space: nowrap;
+      transition: opacity 0.5s;
     }
-    #hint.hidden { opacity:0; }
+    #hint.hidden { opacity: 0; }
   </style>
 </head>
 <body>
 
 <canvas id="c"></canvas>
 
-<div id="narrative"><h1 id="nar-title"></h1><p id="nar-sub"></p></div>
-<div id="scene-label">Scene 3 &nbsp;/&nbsp; Multiple Control Planes</div>
+<div id="narrative">
+  <h1 id="nar-title"></h1>
+  <p id="nar-sub"></p>
+</div>
 
-<div id="legend">
-  <div class="leg-row">
-    <span class="leg-line" style="background:#4ADE80;box-shadow:0 0 6px #4ADE80;"></span>
-    <span class="leg-text">Control Plane → Cluster (apply changes)</span>
+<div id="scene-label">Scene 3 &nbsp;/&nbsp; The Scaling Problem</div>
+
+<div id="legend" style="
+  position:absolute; bottom:68px; right:32px;
+  display:flex; flex-direction:column; gap:7px;
+  opacity:0; transition:opacity 0.8s ease;
+  pointer-events:none;
+">
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span style="width:28px;height:3px;border-radius:2px;background:#F59E0B;box-shadow:0 0 6px #F59E0B;display:block;"></span>
+    <span style="font-size:11px;color:rgba(255,255,255,0.45);font-family:Inter,sans-serif;letter-spacing:0.04em;">App → ArgoCD (sync request)</span>
   </div>
-  <div class="leg-row">
-    <span class="leg-line" style="background:#60A5FA;box-shadow:0 0 6px #60A5FA;"></span>
-    <span class="leg-text">Cluster → Control Plane (actual state)</span>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span style="width:28px;height:3px;border-radius:2px;background:#4ADE80;box-shadow:0 0 6px #4ADE80;display:block;"></span>
+    <span style="font-size:11px;color:rgba(255,255,255,0.45);font-family:Inter,sans-serif;letter-spacing:0.04em;">ArgoCD → Cluster (reconcile)</span>
   </div>
-  <div class="leg-row">
-    <span class="leg-line" style="background:#F59E0B;box-shadow:0 0 6px #F59E0B;"></span>
-    <span class="leg-text">Managed Platform → Control Plane (routing)</span>
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span style="width:28px;height:3px;border-radius:2px;background:#60A5FA;box-shadow:0 0 6px #60A5FA;display:block;"></span>
+    <span style="font-size:11px;color:rgba(255,255,255,0.45);font-family:Inter,sans-serif;letter-spacing:0.04em;">Cluster → ArgoCD (status)</span>
   </div>
 </div>
 
 <div id="hint">Click or press Space to continue</div>
+
 <div id="progress"></div>
 
 <script>
 'use strict';
 
-// ─── Canvas ────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Canvas & DPR
+// ─────────────────────────────────────────────────────────────────────────────
 const canvas = document.getElementById('c');
 const ctx    = canvas.getContext('2d');
 let W = 0, H = 0;
+
 function resize() {
   const dpr = window.devicePixelRatio || 1;
-  W = window.innerWidth; H = window.innerHeight;
-  canvas.width = W*dpr; canvas.height = H*dpr;
-  canvas.style.width = W+'px'; canvas.style.height = H+'px';
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
   ctx.scale(dpr, dpr);
 }
 resize();
@@ -134,478 +202,521 @@ function drawArgoLabel(cx, cy, text, font, color, op, iconSz) {
   ctx.restore();
 }
 
-// ─── Nodes ────────────────────────────────────────────────────────────────────
-// Layout: User (top) → Platform → CPs → Clusters (bottom)
+// ─────────────────────────────────────────────────────────────────────────────
+// Node Definitions
+// rx/ry = relative position [0..1] on canvas
+// step  = first step at which this node becomes visible
+// ─────────────────────────────────────────────────────────────────────────────
 const NODES = {
-  // Single hot ArgoCD (step 0, fades out at step 2)
-  argocd: { rx:0.50, ry:0.47, type:'hot_argocd', label:'ArgoCD', step:0, fadeStep:2 },
+  argocd:    { rx:0.50, ry:0.47, type:'argocd',  step:0 },
 
-  // Clusters — always at bottom (step 0)
-  dc1: { rx:0.10, ry:0.84, type:'cluster', step:0 },
-  dc2: { rx:0.29, ry:0.87, type:'cluster', step:0 },
-  dc3: { rx:0.50, ry:0.88, type:'cluster', step:0 },
-  dc4: { rx:0.71, ry:0.87, type:'cluster', step:0 },
-  dc5: { rx:0.90, ry:0.84, type:'cluster', step:0 },
+  // Initial clusters (step 0) — bottom row
+  c1:        { rx:0.28, ry:0.78, type:'cluster', step:0 },
+  c2:        { rx:0.50, ry:0.80, type:'cluster', step:0 },
+  c3:        { rx:0.72, ry:0.78, type:'cluster', step:0 },
 
-  // Control Planes (step 2 — replace single ArgoCD)
-  cp1: { rx:0.22, ry:0.55, type:'cp', label:'Control Plane 1', sub:'ArgoCD instance', step:2 },
-  cp2: { rx:0.50, ry:0.55, type:'cp', label:'Control Plane 2', sub:'ArgoCD instance', step:2 },
-  cp3: { rx:0.78, ry:0.55, type:'cp', label:'Control Plane 3', sub:'ArgoCD instance', step:2 },
+  // App wave 1 (step 1) — top row, spread
+  a1:        { rx:0.22, ry:0.15, type:'app',     step:1 },
+  a2:        { rx:0.50, ry:0.12, type:'app',     step:1 },
+  a3:        { rx:0.78, ry:0.15, type:'app',     step:1 },
 
-  // User (step 3)
-  user: { rx:0.50, ry:0.09, type:'user', label:'User', step:3 },
+  // App wave 2 (step 2) — fill in gaps top row
+  a4:        { rx:0.08, ry:0.20, type:'app',     step:2 },
+  a5:        { rx:0.36, ry:0.11, type:'app',     step:2 },
+  a6:        { rx:0.64, ry:0.11, type:'app',     step:2 },
+  a7:        { rx:0.92, ry:0.20, type:'app',     step:2 },
 
-  // Managed ArgoCD Platform (step 4)
-  platform: { rx:0.50, ry:0.28, type:'platform', label:'Managed ArgoCD Platform', sub:'Smart routing · Unified API', step:4 },
+  // Cluster wave 2 (step 3) — expand bottom row
+  c4:        { rx:0.10, ry:0.79, type:'cluster', step:3 },
+  c5:        { rx:0.90, ry:0.79, type:'cluster', step:3 },
+  c6:        { rx:0.38, ry:0.87, type:'cluster', step:3 },
+  c7:        { rx:0.62, ry:0.87, type:'cluster', step:3 },
 };
 
+// Live opacity per node (animated toward target)
 const opacity = {};
 Object.keys(NODES).forEach(k => opacity[k] = 0);
 
-// ─── Connections ──────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Connections  [from, to]
+// ─────────────────────────────────────────────────────────────────────────────
 const CONNS = [
-  // Hot ArgoCD ↔ all clusters (step 0-1)
-  { from:'argocd', to:'dc1', step:0 },
-  { from:'dc1', to:'argocd', step:0 },
-  { from:'argocd', to:'dc2', step:0 },
-  { from:'dc2', to:'argocd', step:0 },
-  { from:'argocd', to:'dc3', step:0 },
-  { from:'dc3', to:'argocd', step:0 },
-  { from:'argocd', to:'dc4', step:0 },
-  { from:'dc4', to:'argocd', step:0 },
-  { from:'argocd', to:'dc5', step:0 },
-  { from:'dc5', to:'argocd', step:0 },
-
-  // CP-1 ↔ left clusters (step 2)
-  { from:'cp1', to:'dc1', step:2 },
-  { from:'dc1', to:'cp1', step:2 },
-  { from:'cp1', to:'dc2', step:2 },
-  { from:'dc2', to:'cp1', step:2 },
-
-  // CP-2 ↔ center cluster (step 2)
-  { from:'cp2', to:'dc3', step:2 },
-  { from:'dc3', to:'cp2', step:2 },
-
-  // CP-3 ↔ right clusters (step 2)
-  { from:'cp3', to:'dc4', step:2 },
-  { from:'dc4', to:'cp3', step:2 },
-  { from:'cp3', to:'dc5', step:2 },
-  { from:'dc5', to:'cp3', step:2 },
-
-  // Platform → CPs (step 4)
-  { from:'platform', to:'cp1', step:4 },
-  { from:'platform', to:'cp2', step:4 },
-  { from:'platform', to:'cp3', step:4 },
-
-  // User → Platform (step 4)
-  { from:'user', to:'platform', step:4 },
+  // ArgoCD reconciles clusters (step 0)
+  { from:'argocd', to:'c1', step:0 },
+  { from:'argocd', to:'c2', step:0 },
+  { from:'argocd', to:'c3', step:0 },
+  // Clusters report back
+  { from:'c1', to:'argocd', step:0 },
+  { from:'c2', to:'argocd', step:0 },
+  { from:'c3', to:'argocd', step:0 },
+  // App wave 1 sync requests
+  { from:'a1', to:'argocd', step:1 },
+  { from:'a2', to:'argocd', step:1 },
+  { from:'a3', to:'argocd', step:1 },
+  // App wave 2
+  { from:'a4', to:'argocd', step:2 },
+  { from:'a5', to:'argocd', step:2 },
+  { from:'a6', to:'argocd', step:2 },
+  { from:'a7', to:'argocd', step:2 },
+  // Cluster wave 2
+  { from:'argocd', to:'c4', step:3 },
+  { from:'argocd', to:'c5', step:3 },
+  { from:'argocd', to:'c6', step:3 },
+  { from:'argocd', to:'c7', step:3 },
+  { from:'c4', to:'argocd', step:3 },
+  { from:'c5', to:'argocd', step:3 },
+  { from:'c6', to:'argocd', step:3 },
+  { from:'c7', to:'argocd', step:3 },
 ];
 
-// ─── State ────────────────────────────────────────────────────────────────────
-let step       = 0;
-const MAX_STEPS = 6;  // 0–5
-let particles  = [];
-let frozen     = false;
-let t          = 0;
-let pulse      = 0;
+// ─────────────────────────────────────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────────────────────────────────────
+let step        = 0;
+const MAX_STEPS = 7;  // steps 0 – 6
+let pressure    = 0;  // 0–1, drives ArgoCD glow intensity
+let pulsePhase  = 0;
+let frozen      = false;
+let particles   = [];
+let t           = 0;  // global frame counter
 
-// Animated scalar values
-let hotLevel      = 0;  // heat of single overloaded ArgoCD
-let questionAlpha = 0;  // "?" mark near ArgoCD
-let confusedAlpha = 0;  // confused dashed arrows (step 3)
-
-// ─── Particle ──────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Particle
+// ─────────────────────────────────────────────────────────────────────────────
 class Particle {
   constructor(from, to, col) {
-    this.from = from; this.to = to; this.col = col;
-    this.p    = 0;
+    this.from = from;
+    this.to   = to;
+    this.col  = col;
+    this.p    = 0;                                // progress 0→1
     this.spd  = 0.006 + Math.random() * 0.004;
-    this.r    = 2.2 + Math.random() * 1.6;
-    this.bow  = { x:(Math.random()-.5)*0.10, y:(Math.random()-.5)*0.07 };
+    this.r    = 2.2 + Math.random() * 1.6;       // radius
+    // Slight random bezier bow
+    this.bow  = { x:(Math.random()-0.5)*0.12, y:(Math.random()-0.5)*0.08 };
     this.alive = true;
   }
+
   pos() {
-    const f=NODES[this.from], t2=NODES[this.to];
-    const fx=f.rx*W, fy=f.ry*H, tx=t2.rx*W, ty=t2.ry*H;
-    const cx=(fx+tx)/2+this.bow.x*Math.min(W,H);
-    const cy=(fy+ty)/2+this.bow.y*Math.min(W,H);
-    const u=1-this.p;
-    return { x:u*u*fx+2*u*this.p*cx+this.p*this.p*tx,
-             y:u*u*fy+2*u*this.p*cy+this.p*this.p*ty };
+    const f = NODES[this.from], t = NODES[this.to];
+    const fx=f.rx*W, fy=f.ry*H, tx=t.rx*W, ty=t.ry*H;
+    const cx = (fx+tx)/2 + this.bow.x * Math.min(W,H);
+    const cy = (fy+ty)/2 + this.bow.y * Math.min(W,H);
+    const u  = 1 - this.p;
+    return { x: u*u*fx + 2*u*this.p*cx + this.p*this.p*tx,
+             y: u*u*fy + 2*u*this.p*cy + this.p*this.p*ty };
   }
-  update() { this.p+=this.spd; if(this.p>=1) this.alive=false; }
+
+  update() {
+    this.p += this.spd;
+    if (this.p >= 1) this.alive = false;
+  }
+
   draw() {
-    const {x,y}=this.pos();
-    const alpha=Math.sin(this.p*Math.PI);
+    if (!this.alive) return;
+    const { x, y } = this.pos();
+    const alpha = Math.sin(this.p * Math.PI); // fade in/out
     ctx.save();
-    ctx.globalAlpha=alpha*0.35;
-    ctx.fillStyle=this.col; ctx.shadowColor=this.col; ctx.shadowBlur=14;
-    ctx.beginPath(); ctx.arc(x,y,this.r*2.5,0,Math.PI*2); ctx.fill();
-    ctx.globalAlpha=alpha*0.92; ctx.shadowBlur=4;
-    ctx.beginPath(); ctx.arc(x,y,this.r,0,Math.PI*2); ctx.fill();
+    // Glow halo
+    ctx.globalAlpha = alpha * 0.35;
+    ctx.fillStyle = this.col;
+    ctx.shadowColor = this.col;
+    ctx.shadowBlur = 14;
+    ctx.beginPath();
+    ctx.arc(x, y, this.r * 2.5, 0, Math.PI*2);
+    ctx.fill();
+    // Core
+    ctx.globalAlpha = alpha * 0.92;
+    ctx.shadowBlur = 4;
+    ctx.beginPath();
+    ctx.arc(x, y, this.r, 0, Math.PI*2);
+    ctx.fill();
     ctx.restore();
   }
 }
 
-// ─── Particle colour ───────────────────────────────────────────────────────────
-function pColor(from, to) {
-  // Step 0-1: hot overloaded traffic
-  if (from==='argocd'||to==='argocd') return step<=1?'#FB923C':'#60A5FA';
-  // User → Platform: white/silver
-  if (from==='user') return '#E2E8F0';
-  // Platform → CP: amber (routing)
-  if (from==='platform') return '#F59E0B';
-  // CP → Cluster: green (apply)
-  if (to==='dc1'||to==='dc2'||to==='dc3'||to==='dc4'||to==='dc5') return '#4ADE80';
-  // Cluster → CP: blue (status)
-  if (from==='dc1'||from==='dc2'||from==='dc3'||from==='dc4'||from==='dc5') return '#60A5FA';
-  return '#60A5FA';
-}
-
-// ─── Spawn probability ────────────────────────────────────────────────────────
-function spawnProb() {
-  // step: 0=hot, 1=hot+question, 2=distributed calm, 3=calm+confused, 4=routed, 5=frozen
-  return [0.025, 0.025, 0.014, 0.014, 0.012, 0][Math.min(step,5)];
-}
-
-// ─── Active connections ────────────────────────────────────────────────────────
-function activeConns() {
-  if (frozen) return [];
-  return CONNS.filter(c => {
-    if (c.step > step) return false;
-    // argocd connections disappear when CPs take over
-    if (step>=2 && (c.from==='argocd'||c.to==='argocd')) return false;
-    return true;
-  });
-}
-
-function maybeSpawn() {
-  const prob=spawnProb(); if(!prob) return;
-  activeConns().forEach(c => {
-    const fo=opacity[c.from]||0, to=opacity[c.to]||0;
-    if(fo<0.35||to<0.35) return;
-    if(Math.random()<prob)
-      particles.push(new Particle(c.from, c.to, pColor(c.from, c.to)));
-  });
-}
-
-// ─── Opacity targets ──────────────────────────────────────────────────────────
-function opTarget(key) {
-  const n=NODES[key];
-  if(n.step>step) return 0;
-  if(key==='argocd' && step>=2) return 0;   // fades out when CPs appear
-  if(step>=5) return 0.12;                   // dim on final message
-  return 1;
-}
-function updateOpacity() {
-  Object.keys(NODES).forEach(k => { opacity[k]+=(opTarget(k)-opacity[k])*0.025; });
-}
-
-// ─── Animated scalar targets ───────────────────────────────────────────────────
-function updateAnimatedValues() {
-  const tgtHot      = step<=1 ? 0.90 : 0;
-  const tgtQuestion = step===1 ? 1   : 0;
-  const tgtConfused = step===3 ? 1   : 0;
-  hotLevel      += (tgtHot      - hotLevel)      * 0.025;
-  questionAlpha += (tgtQuestion - questionAlpha) * 0.040;
-  confusedAlpha += (tgtConfused - confusedAlpha) * 0.040;
-}
-
-// ─── Rounded rect helper ──────────────────────────────────────────────────────
-function rr(x,y,w,h,r) {
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+function rr(ctx, x, y, w, h, r) {
   ctx.beginPath();
-  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
-  ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
-  ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
-  ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y);
+  ctx.moveTo(x+r, y);
+  ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+  ctx.lineTo(x+w, y+h-r); ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+  ctx.lineTo(x+r, y+h); ctx.quadraticCurveTo(x, y+h, x, y+h-r);
+  ctx.lineTo(x, y+r); ctx.quadraticCurveTo(x, y, x+r, y);
   ctx.closePath();
 }
 
-// ─── Background ───────────────────────────────────────────────────────────────
+function lerp(a, b, t) { return a + (b - a) * t; }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+// Particle spawn probability per frame per active connection
+function spawnProb() {
+  const probs = [0.002, 0.006, 0.013, 0.024, 0.055, 0, 0];
+  return probs[clamp(step, 0, 6)];
+}
+
+function particleColor(from, to) {
+  if (step >= 4) return '#FB923C'; // all flows turn orange under pressure
+
+  const fromType = NODES[from].type;
+  const toType   = NODES[to].type;
+
+  // Application → ArgoCD: amber/warm
+  if (fromType === 'app' && to === 'argocd') return '#F59E0B';
+
+  // Cluster → ArgoCD (status reports): cool blue
+  if (fromType === 'cluster' && to === 'argocd') return '#60A5FA';
+
+  // ArgoCD → Cluster (reconcile): green
+  if (from === 'argocd' && toType === 'cluster') return '#4ADE80';
+
+  return '#F59E0B';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Draw background
+// ─────────────────────────────────────────────────────────────────────────────
 function drawBg() {
-  ctx.fillStyle='#080B12'; ctx.fillRect(0,0,W,H);
-  const gx=0.50*W, gy=(step<=1?0.47:0.50)*H, gr=Math.min(W,H)*0.55;
-  const g=ctx.createRadialGradient(gx,gy,0,gx,gy,gr);
-  if(hotLevel>0.3){
-    g.addColorStop(0,`rgba(100,25,8,${hotLevel*0.16})`);
-    g.addColorStop(0.5,`rgba(50,12,4,${hotLevel*0.08})`);
+  ctx.fillStyle = '#080B12';
+  ctx.fillRect(0, 0, W, H);
+
+  // Atmospheric glow around ArgoCD area
+  const n = NODES.argocd;
+  const gx = n.rx * W, gy = n.ry * H;
+  const gr = Math.min(W, H) * 0.55;
+  const bg = ctx.createRadialGradient(gx, gy, 0, gx, gy, gr);
+  if (step >= 4) {
+    bg.addColorStop(0,   `rgba(100, 25, 10, ${0.12 + pressure*0.12})`);
+    bg.addColorStop(0.5, `rgba(50, 10, 5, ${0.06 + pressure*0.06})`);
   } else {
-    g.addColorStop(0,'rgba(5,20,50,0.12)');
-    g.addColorStop(0.5,'rgba(3,12,30,0.05)');
+    bg.addColorStop(0,   'rgba(5, 25, 55, 0.16)');
+    bg.addColorStop(0.5, 'rgba(3, 15, 35, 0.08)');
   }
-  g.addColorStop(1,'rgba(0,0,0,0)');
-  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  bg.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
 }
 
-// ─── Connection lines ──────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Draw static connection lines
+// ─────────────────────────────────────────────────────────────────────────────
+const drawnLines = new Set();
+
 function drawLines() {
-  const drawn=new Set();
+  drawnLines.clear();
   CONNS.forEach(c => {
-    if(c.step>step) return;
-    if(step>=2&&(c.from==='argocd'||c.to==='argocd')) return;
-    const key=[c.from,c.to].sort().join('|');
-    if(drawn.has(key)) return; drawn.add(key);
-    const fo=opacity[c.from]||0, to2=opacity[c.to]||0;
-    const lo=Math.min(fo,to2); if(lo<0.04) return;
+    const key = [c.from, c.to].sort().join('|');
+    if (drawnLines.has(key)) return;
+    drawnLines.add(key);
+
+    const f = NODES[c.from], t = NODES[c.to];
+    const lineAlpha = Math.min(opacity[c.from], opacity[c.to]);
+    if (lineAlpha < 0.04) return;
+
     ctx.save();
-    ctx.globalAlpha=lo*0.22;
-    ctx.strokeStyle='rgba(80,140,210,0.5)';
-    ctx.lineWidth=1; ctx.setLineDash([4,10]);
-    ctx.lineDashOffset=-(t*0.28);
+    ctx.globalAlpha = lineAlpha * 0.22;
+    ctx.strokeStyle = 'rgba(80, 140, 210, 0.5)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 10]);
+    ctx.lineDashOffset = -(t * 0.3);
     ctx.beginPath();
-    ctx.moveTo(NODES[c.from].rx*W,NODES[c.from].ry*H);
-    ctx.lineTo(NODES[c.to].rx*W,  NODES[c.to].ry*H);
-    ctx.stroke(); ctx.setLineDash([]);
+    ctx.moveTo(f.rx*W, f.ry*H);
+    ctx.lineTo(t.rx*W, t.ry*H);
+    ctx.stroke();
+    ctx.setLineDash([]);
     ctx.restore();
   });
 }
 
-// ─── Confused arrows (step 3) — user → all CPs with "?" marks ─────────────────
-function drawConfusedArrows() {
-  const ca=confusedAlpha; if(ca<0.02) return;
-  const ux=NODES.user.rx*W, uy=NODES.user.ry*H;
-  const cps=['cp1','cp2','cp3'];
-  cps.forEach(key => {
-    const n=NODES[key];
-    const cx=n.rx*W, cy=n.ry*H;
-    const mx=(ux+cx)/2, my=(uy+cy)/2;
-    ctx.save();
-    ctx.globalAlpha=ca*0.55;
-    ctx.strokeStyle='rgba(250,204,21,0.9)'; // yellow
-    ctx.lineWidth=1.5; ctx.setLineDash([5,8]);
-    ctx.lineDashOffset=-(t*0.2);
-    ctx.beginPath(); ctx.moveTo(ux,uy+22); ctx.lineTo(cx,cy-28);
-    ctx.stroke(); ctx.setLineDash([]);
-
-    // "?" mark at midpoint
-    ctx.globalAlpha=ca*0.85;
-    ctx.font='bold 18px Inter,sans-serif';
-    ctx.textAlign='center'; ctx.textBaseline='middle';
-    ctx.fillStyle='#FDE047'; // yellow
-    ctx.shadowColor='#FDE047'; ctx.shadowBlur=10;
-    ctx.fillText('?', mx, my);
-    ctx.restore();
-  });
+// ─────────────────────────────────────────────────────────────────────────────
+// Draw nodes
+// ─────────────────────────────────────────────────────────────────────────────
+function nodeSize(type) {
+  if (type === 'argocd')  return [148, 60];
+  if (type === 'cluster') return [120, 48];
+  return [96, 36];
 }
 
-// ─── "?" floating near ArgoCD (step 1) ────────────────────────────────────────
-function drawQuestion() {
-  if(questionAlpha<0.02) return;
-  const n=NODES.argocd;
-  const x=n.rx*W+80, y=n.ry*H-20;
-  const fl=Math.sin(t*0.04)*6; // float up/down
+function drawArgoCD(x, y, op) {
+  const [w, h] = nodeSize('argocd');
+  const px = x - w/2, py = y - h/2;
+
+  // Pressure-sensitive glow color
+  const gcol = pressure > 0.5 ? '#FB923C' : '#EF4444';
+  const glowR = 28 + pressure * 22 + Math.sin(pulsePhase) * (4 + pressure * 8);
+
   ctx.save();
-  ctx.globalAlpha=questionAlpha*0.9;
-  ctx.font=`bold ${clamp(Math.round(W*0.055),40,72)}px Inter,sans-serif`;
-  ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillStyle='#FDE047';
-  ctx.shadowColor='#FDE047'; ctx.shadowBlur=22;
-  ctx.fillText('?', x, y+fl);
-  ctx.restore();
-}
+  ctx.globalAlpha = op;
 
-// ─── Node draw functions ───────────────────────────────────────────────────────
-function sz(type) {
-  return { hot_argocd:[152,62], cp:[150,58], user:[108,44],
-           platform:[220,62], cluster:[120,48] }[type] || [140,52];
-}
+  // Outer glow
+  ctx.shadowColor = gcol;
+  ctx.shadowBlur  = glowR;
+  ctx.fillStyle   = 'rgba(28, 8, 8, 0.95)';
+  rr(ctx, px, py, w, h, 12);
+  ctx.fill();
 
-function drawHotArgoCD(x,y,op) {
-  const [w,h]=sz('hot_argocd'), px=x-w/2, py=y-h/2;
-  const hv=hotLevel;
-  const gc=hv>0.6?'#FB923C':'#EF4444';
-  const bl=26+hv*24+Math.sin(pulse)*7;
-  ctx.save(); ctx.globalAlpha=op;
-  ctx.shadowColor=gc; ctx.shadowBlur=bl;
-  ctx.fillStyle='rgba(28,8,8,0.97)'; rr(px,py,w,h,12); ctx.fill();
-  if(hv>0.5){ctx.shadowBlur=bl*1.5; rr(px,py,w,h,12); ctx.fill();}
-  ctx.shadowBlur=0;
-  ctx.strokeStyle=`rgba(239,68,68,${0.65+hv*0.35})`; ctx.lineWidth=2;
-  rr(px,py,w,h,12); ctx.stroke();
+  // Double glow at high pressure
+  if (pressure > 0.5) {
+    ctx.shadowBlur = glowR * 1.6;
+    rr(ctx, px, py, w, h, 12);
+    ctx.fill();
+  }
+
+  ctx.shadowBlur = 0;
+
+  // Border
+  const borderAlpha = 0.7 + pressure * 0.3;
+  ctx.strokeStyle = pressure > 0.5
+    ? `rgba(251, 146, 60, ${borderAlpha})`
+    : `rgba(239, 68, 68, ${borderAlpha})`;
+  ctx.lineWidth = 1.5;
+  rr(ctx, px, py, w, h, 12);
+  ctx.stroke();
+
   ctx.restore();
   // Label — ArgoCD icon + text centred, drawn after restore so glow doesn't bleed
-  drawArgoLabel(x, y, 'ArgoCD', '600 15px Inter,sans-serif', '#FCA5A5', op, 15);
+  drawArgoLabel(x, y, 'ArgoCD', '600 15px Inter,-apple-system,sans-serif', '#FFFFFF', op, 15);
 }
 
-function drawCP(key,x,y,op) {
-  const [w,h]=sz('cp'), px=x-w/2, py=y-h/2;
-  const n=NODES[key];
-  ctx.save(); ctx.globalAlpha=op;
-  ctx.shadowColor='rgba(59,130,246,0.40)'; ctx.shadowBlur=18;
-  ctx.fillStyle='rgba(6,16,42,0.97)'; rr(px,py,w,h,12); ctx.fill();
-  ctx.shadowBlur=0; ctx.strokeStyle='rgba(59,130,246,0.70)'; ctx.lineWidth=1.5;
-  rr(px,py,w,h,12); ctx.stroke();
-  ctx.fillStyle='rgba(147,197,253,0.48)'; ctx.font='500 10px Inter,sans-serif';
-  ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText(n.sub,x,y+8);
-  ctx.restore();
-  // Main label with ArgoCD icon — centred unit
-  drawArgoLabel(x, y-7, n.label, '600 13px Inter,sans-serif', '#93C5FD', op, 13);
-}
+function drawCluster(x, y, op) {
+  const [w, h] = nodeSize('cluster');
+  const px = x - w/2, py = y - h/2;
 
-function drawUser(x,y,op) {
-  const [w,h]=sz('user'), px=x-w/2, py=y-h/2;
-  ctx.save(); ctx.globalAlpha=op;
-  ctx.shadowColor='rgba(226,232,240,0.35)'; ctx.shadowBlur=14;
-  ctx.fillStyle='rgba(15,20,35,0.96)'; rr(px,py,w,h,10); ctx.fill();
-  ctx.shadowBlur=0; ctx.strokeStyle='rgba(226,232,240,0.55)'; ctx.lineWidth=1.5;
-  rr(px,py,w,h,10); ctx.stroke();
-  ctx.fillStyle='#E2E8F0'; ctx.font='600 13px Inter,sans-serif';
-  ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText('User',x,y);
-  ctx.restore();
-}
+  ctx.save();
+  ctx.globalAlpha = op;
 
-function drawPlatform(x,y,op) {
-  const [w,h]=sz('platform'), px=x-w/2, py=y-h/2;
-  const bl=22+Math.sin(pulse*0.8)*5;
-  ctx.save(); ctx.globalAlpha=op;
-  ctx.shadowColor='rgba(245,158,11,0.55)'; ctx.shadowBlur=bl;
-  ctx.fillStyle='rgba(22,14,2,0.97)'; rr(px,py,w,h,12); ctx.fill();
-  ctx.shadowBlur=0; ctx.strokeStyle='rgba(245,158,11,0.80)'; ctx.lineWidth=2;
-  rr(px,py,w,h,12); ctx.stroke();
-  ctx.fillStyle='rgba(253,230,138,0.52)'; ctx.font='500 10px Inter,sans-serif';
-  ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText('Smart routing · Unified API',x,y+8);
-  ctx.restore();
-  // Main label with ArgoCD icon — centred unit
-  drawArgoLabel(x, y-7, 'Managed ArgoCD Platform', '700 13px Inter,sans-serif', '#FDE68A', op, 13);
-}
+  // Glow
+  ctx.shadowColor = 'rgba(59,130,246,0.45)';
+  ctx.shadowBlur  = 14;
+  ctx.fillStyle   = 'rgba(8, 18, 42, 0.95)';
+  rr(ctx, px, py, w, h, 9);
+  ctx.fill();
+  ctx.shadowBlur  = 0;
 
-function drawCluster(x,y,op) {
-  const [w,h]=sz('cluster'), px=x-w/2, py=y-h/2;
-  ctx.save(); ctx.globalAlpha=op;
-  ctx.shadowColor='rgba(59,130,246,0.38)'; ctx.shadowBlur=12;
-  ctx.fillStyle='rgba(6,15,40,0.96)'; rr(px,py,w,h,9); ctx.fill();
-  ctx.shadowBlur=0; ctx.strokeStyle='rgba(59,130,246,0.62)'; ctx.lineWidth=1;
-  rr(px,py,w,h,9); ctx.stroke();
-  ctx.fillStyle='rgba(147,197,253,0.85)'; ctx.font='500 11px Inter,sans-serif';
-  ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText('K8s Cluster',x,py+15);
-  const nd=3, sp=11, sx=x-((nd-1)*sp)/2, dy=py+h-13;
-  for(let i=0;i<nd;i++){
-    ctx.fillStyle='rgba(96,165,250,0.72)'; ctx.shadowColor='rgba(96,165,250,0.4)'; ctx.shadowBlur=3;
-    ctx.beginPath(); ctx.arc(sx+i*sp,dy,2.8,0,Math.PI*2); ctx.fill();
+  // Border
+  ctx.strokeStyle = 'rgba(59,130,246,0.65)';
+  ctx.lineWidth   = 1;
+  rr(ctx, px, py, w, h, 9);
+  ctx.stroke();
+
+  // Label
+  ctx.fillStyle   = 'rgba(147,197,253,0.85)';
+  ctx.font        = '500 11px Inter, -apple-system, sans-serif';
+  ctx.textAlign   = 'center';
+  ctx.textBaseline= 'middle';
+  ctx.fillText('K8s Cluster', x, py + 14);
+
+  // Workload dots
+  const nd = step >= 3 ? 4 : 3;
+  const sp = 11;
+  const sx = x - ((nd - 1) * sp) / 2;
+  const dy = py + h - 14;
+  for (let i = 0; i < nd; i++) {
+    ctx.fillStyle   = 'rgba(96,165,250,0.7)';
+    ctx.shadowColor = 'rgba(96,165,250,0.4)';
+    ctx.shadowBlur  = 4;
+    ctx.beginPath();
+    ctx.arc(sx + i*sp, dy, 3, 0, Math.PI*2);
+    ctx.fill();
   }
+
+  ctx.restore();
+}
+
+function drawApp(x, y, op) {
+  const [w, h] = nodeSize('app');
+  const px = x - w/2, py = y - h/2;
+
+  ctx.save();
+  ctx.globalAlpha = op;
+
+  ctx.shadowColor = 'rgba(6,182,212,0.3)';
+  ctx.shadowBlur  = 12;
+  ctx.fillStyle   = 'rgba(0,18,26,0.92)';
+  rr(ctx, px, py, w, h, 7);
+  ctx.fill();
+  ctx.shadowBlur  = 0;
+
+  ctx.strokeStyle = 'rgba(6,182,212,0.55)';
+  ctx.lineWidth   = 1;
+  rr(ctx, px, py, w, h, 7);
+  ctx.stroke();
+
+  ctx.fillStyle   = 'rgba(103,232,249,0.88)';
+  ctx.font        = '500 11px Inter, -apple-system, sans-serif';
+  ctx.textAlign   = 'center';
+  ctx.textBaseline= 'middle';
+  ctx.fillText('Application', x, y);
+
   ctx.restore();
 }
 
 function drawNodes() {
-  Object.entries(NODES).forEach(([k,n]) => {
-    const op=opacity[k]; if(op<0.01) return;
-    const x=n.rx*W, y=n.ry*H;
-    switch(n.type){
-      case 'hot_argocd': drawHotArgoCD(x,y,op); break;
-      case 'cp':         drawCP(k,x,y,op); break;
-      case 'user':       drawUser(x,y,op); break;
-      case 'platform':   drawPlatform(x,y,op); break;
-      case 'cluster':    drawCluster(x,y,op); break;
+  Object.entries(NODES).forEach(([k, n]) => {
+    const op = opacity[k];
+    if (op < 0.01) return;
+    const x = n.rx * W, y = n.ry * H;
+    if (n.type === 'argocd')  drawArgoCD(x, y, op);
+    else if (n.type === 'cluster') drawCluster(x, y, op);
+    else drawApp(x, y, op);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Update
+// ─────────────────────────────────────────────────────────────────────────────
+function updateOpacities() {
+  Object.keys(NODES).forEach(k => {
+    const n = NODES[k];
+    const target = (n.step <= step && step < 5) ? 1 : (step >= 5 && step <= 6 ? (n.step <= step ? 0.25 : 0) : 0);
+    opacity[k] = lerp(opacity[k], target, 0.025);
+  });
+}
+
+function updatePressure() {
+  const targets = [0, 0.08, 0.22, 0.50, 1.0, 1.0, 1.0];
+  const target  = targets[clamp(step, 0, 6)];
+  pressure = lerp(pressure, target, 0.018);
+}
+
+function maybeSpawnParticles() {
+  if (frozen) return;
+  const prob = spawnProb();
+  if (prob === 0) return;
+
+  CONNS.forEach(c => {
+    if (c.step > step) return;
+    const fop = opacity[c.from], top = opacity[c.to];
+    if (fop < 0.35 || top < 0.35) return;
+    if (Math.random() < prob) {
+      particles.push(new Particle(c.from, c.to, particleColor(c.from, c.to)));
     }
   });
 }
 
-// ─── Step subtitle (top-right) ────────────────────────────────────────────────
-const STEP_LABELS = [
-  'One ArgoCD — managing everything, under pressure',
-  'What if we had multiple ArgoCD instances instead?',
-  'Three control planes — each owns a bounded slice',
-  'Which control plane does the user connect to?',
-  'Managed ArgoCD Platform — one entry point, smart routing',
-  '',
-];
-let stepLabelAlpha = 0;
-let currentLabel   = '';
-let prevLabel      = '';
+// ─────────────────────────────────────────────────────────────────────────────
+// Narrative
+// ─────────────────────────────────────────────────────────────────────────────
+const narrativeEl = document.getElementById('narrative');
+const narTitle    = document.getElementById('nar-title');
+const narSub      = document.getElementById('nar-sub');
 
-function drawStepLabel() {
-  const label = step<5 ? STEP_LABELS[step] : '';
-  if(!label) return;
-  ctx.save();
-  ctx.globalAlpha=0.40;
-  ctx.fillStyle='#fff'; ctx.font='500 11.5px Inter,sans-serif';
-  ctx.textAlign='right'; ctx.textBaseline='top';
-  ctx.fillText(label, W-36, 28);
-  ctx.restore();
+const legendEl = document.getElementById('legend');
+function updateLegend() {
+  legendEl.style.opacity = (step >= 1 && step <= 4) ? '1' : '0';
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function clamp(v,lo,hi){return Math.max(lo,Math.min(hi,v));}
-
-// ─── Narrative ────────────────────────────────────────────────────────────────
-const narrativeEl=document.getElementById('narrative');
-const narTitle=document.getElementById('nar-title');
-const narSub=document.getElementById('nar-sub');
-
 function updateNarrative() {
-  if(step===5){
-    narTitle.textContent='One entry point. Smart routing.';
-    narSub.textContent='Each control plane sees only its slice.';
+  if (step === 5) {
+    narTitle.textContent = 'One ArgoCD. Everything depends on it.';
+    narSub.textContent   = '';
+    narrativeEl.classList.add('visible');
+  } else if (step === 6) {
+    narTitle.textContent = 'What happens when everything keeps growing?';
+    narSub.textContent   = '';
     narrativeEl.classList.add('visible');
   } else {
     narrativeEl.classList.remove('visible');
   }
 }
 
-// ─── Legend ───────────────────────────────────────────────────────────────────
-const legendEl=document.getElementById('legend');
-function updateLegend() {
-  legendEl.style.opacity=(step>=2&&step<=4)?'1':'0';
+// ─────────────────────────────────────────────────────────────────────────────
+// Progress dots
+// ─────────────────────────────────────────────────────────────────────────────
+const progressEl = document.getElementById('progress');
+for (let i = 0; i < MAX_STEPS; i++) {
+  const d = document.createElement('div');
+  d.className = 'dot';
+  d.id = 'dot' + i;
+  progressEl.appendChild(d);
+}
+function updateDots() {
+  for (let i = 0; i < MAX_STEPS; i++) {
+    document.getElementById('dot' + i).className = 'dot' + (i === step ? ' active' : '');
+  }
 }
 
-// ─── Progress dots ────────────────────────────────────────────────────────────
-const progressEl=document.getElementById('progress');
-for(let i=0;i<MAX_STEPS;i++){
-  const d=document.createElement('div');
-  d.className='dot'; d.id='dot'+i; progressEl.appendChild(d);
-}
-function updateDots(){
-  for(let i=0;i<MAX_STEPS;i++)
-    document.getElementById('dot'+i).className='dot'+(i===step?' active':'');
-}
-
-// ─── Step advance ─────────────────────────────────────────────────────────────
-const hintEl=document.getElementById('hint');
+// ─────────────────────────────────────────────────────────────────────────────
+// Step advance
+// ─────────────────────────────────────────────────────────────────────────────
+const hintEl = document.getElementById('hint');
 let hintTimer;
-function advance(){
-  if(step>=MAX_STEPS-1) return;
+
+function advance() {
+  if (step >= MAX_STEPS - 1) { window.parent.postMessage({type:'scene-complete'},'*'); return; }
   step++;
-  if(step>=5){frozen=true; particles=[];}
-  updateDots(); updateNarrative(); updateLegend();
+
+  if (step === 5) {
+    frozen = true;
+    // Let existing particles finish, but don't spawn new ones
+    setTimeout(() => { particles = []; }, 400);
+  }
+  if (step === 6) {
+    frozen = true;
+    particles = [];
+  }
+
+  updateDots();
+  updateNarrative();
+  updateLegend();
+
+  // Flash hint
   hintEl.classList.remove('hidden');
   clearTimeout(hintTimer);
-  hintTimer=setTimeout(()=>hintEl.classList.add('hidden'),3000);
+  hintTimer = setTimeout(() => { hintEl.classList.add('hidden'); }, 3000);
 }
+
 document.addEventListener('click', advance);
-document.addEventListener('keydown', e=>{
-  if(e.code==='Space'||e.code==='ArrowRight'){e.preventDefault(); advance();}
-  if(e.code==='ArrowLeft'&&step>0){
-    step--;
-    frozen=step>=5;
-    if(!frozen) particles=[];
-    updateDots(); updateNarrative(); updateLegend();
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowRight') { e.preventDefault(); advance(); }
+  if (e.code === 'ArrowLeft' && step === 0) { window.parent.postMessage({type:'scene-back'},'*'); return; }
+  if (e.code === 'ArrowLeft') {
+    if (step > 0) {
+      step--;
+      frozen = (step >= 5);
+      if (!frozen) particles = [];
+      updateDots(); updateNarrative();
+    }
   }
 });
 
-// ─── Main loop ────────────────────────────────────────────────────────────────
-function loop(){
+// ─────────────────────────────────────────────────────────────────────────────
+// Main loop
+// ─────────────────────────────────────────────────────────────────────────────
+function loop() {
   requestAnimationFrame(loop);
-  t++; pulse+=0.038;
-  updateOpacity();
-  updateAnimatedValues();
-  maybeSpawn();
-  particles=particles.filter(p=>{p.update(); return p.alive;});
+  t++;
+  pulsePhase += 0.038 + pressure * 0.04;
+
+  updateOpacities();
+  updatePressure();
+  maybeSpawnParticles();
+
+  particles = particles.filter(p => { p.update(); return p.alive; });
+
   drawBg();
   drawLines();
-  drawConfusedArrows();
-  particles.forEach(p=>p.draw());
+
+  // Particles behind nodes
+  particles.forEach(p => p.draw());
+
   drawNodes();
-  drawQuestion();
-  drawStepLabel();
 }
 
-updateDots(); updateNarrative(); updateLegend();
-setTimeout(()=>hintEl.classList.add('hidden'),4000);
+// ─────────────────────────────────────────────────────────────────────────────
+// Init
+// ─────────────────────────────────────────────────────────────────────────────
+updateDots();
+updateNarrative();
+setTimeout(() => { hintEl.classList.add('hidden'); }, 4000);
 loop();
+
+// ── ArrowUp = prev scene, ArrowDown = next scene ─────────────────────────────
+document.addEventListener('keydown', function(e) {
+  if (e.code === 'ArrowUp')   { e.preventDefault(); window.parent.postMessage({type:'scene-back'},'*'); }
+  if (e.code === 'ArrowDown') { e.preventDefault(); window.parent.postMessage({type:'scene-complete'},'*'); }
+}, true);
 </script>
 </body>
 </html>

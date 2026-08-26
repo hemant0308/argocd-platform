@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Scene 4 — ApplicationSet Plugin Generator</title>
+  <title>Scene 4 — Inside ArgoCD</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     * { margin:0; padding:0; box-sizing:border-box; }
@@ -15,6 +15,7 @@
     }
     canvas { display:block; position:absolute; top:0; left:0; pointer-events:none; }
 
+    /* ── Narrative overlay ── */
     #narrative {
       position:absolute; inset:0;
       display:flex; flex-direction:column;
@@ -32,27 +33,25 @@
       font-size:clamp(13px,1.6vw,20px); text-align:center; padding:0 40px;
     }
 
+    /* ── Scene label ── */
     #scene-label {
       position:absolute; top:28px; left:36px;
       color:rgba(255,255,255,0.18); font-size:11px;
       letter-spacing:0.12em; text-transform:uppercase; font-weight:500; pointer-events:none;
     }
-    #step-label {
-      position:absolute; top:28px; right:36px;
-      color:rgba(255,255,255,0.30); font-size:11.5px; letter-spacing:0.03em;
-      font-weight:500; pointer-events:none; text-align:right; max-width:340px;
-      transition:opacity 0.4s;
-    }
 
+    /* ── Legend (same style as Scene 1) ── */
     #legend {
       position:absolute; bottom:68px; right:32px;
       display:flex; flex-direction:column; gap:7px;
-      opacity:0; transition:opacity 0.8s ease; pointer-events:none;
+      opacity:0; transition:opacity 0.8s ease;
+      pointer-events:none;
     }
     .leg-row { display:flex; align-items:center; gap:8px; }
     .leg-line { width:28px; height:3px; border-radius:2px; display:block; }
     .leg-text { font-size:11px; color:rgba(255,255,255,0.45); font-family:'Inter',sans-serif; letter-spacing:0.04em; }
 
+    /* ── Progress dots ── */
     #progress {
       position:absolute; bottom:30px; left:50%; transform:translateX(-50%);
       display:flex; gap:7px; align-items:center; pointer-events:none;
@@ -60,6 +59,7 @@
     .dot { width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,0.15); transition:all 0.4s ease; }
     .dot.active { background:rgba(255,255,255,0.75); width:18px; border-radius:3px; }
 
+    /* ── Click hint ── */
     #hint {
       position:absolute; bottom:52px; left:50%; transform:translateX(-50%);
       color:rgba(255,255,255,0.18); font-size:11px; letter-spacing:0.10em;
@@ -71,26 +71,35 @@
 <body>
 
 <canvas id="c"></canvas>
-<div id="narrative"><h1 id="nar-title"></h1><p id="nar-sub"></p></div>
-<div id="scene-label">Scene 4 &nbsp;/&nbsp; Plugin Generator</div>
-<div id="step-label"></div>
 
+<div id="narrative">
+  <h1 id="nar-title"></h1>
+  <p id="nar-sub"></p>
+</div>
+
+<div id="scene-label">Scene 4 &nbsp;/&nbsp; Inside ArgoCD</div>
+
+<!-- Legend — same structure as Scene 1 -->
 <div id="legend">
   <div class="leg-row">
-    <span class="leg-line" style="background:#60A5FA;box-shadow:0 0 6px #60A5FA;"></span>
-    <span class="leg-text">ApplicationSet → API (poll request)</span>
-  </div>
-  <div class="leg-row">
     <span class="leg-line" style="background:#F59E0B;box-shadow:0 0 6px #F59E0B;"></span>
-    <span class="leg-text">API → ApplicationSet (parameter response)</span>
+    <span class="leg-text">Git / App → ArgoCD (sync trigger)</span>
   </div>
   <div class="leg-row">
     <span class="leg-line" style="background:#A78BFA;box-shadow:0 0 6px #A78BFA;"></span>
-    <span class="leg-text">ApplicationSet → Application (creates)</span>
+    <span class="leg-text">App Controller → Repo Server (fetch manifest)</span>
+  </div>
+  <div class="leg-row">
+    <span class="leg-line" style="background:#34D399;box-shadow:0 0 6px #34D399;"></span>
+    <span class="leg-text">App Controller ↔ etcd (state store)</span>
   </div>
   <div class="leg-row">
     <span class="leg-line" style="background:#4ADE80;box-shadow:0 0 6px #4ADE80;"></span>
-    <span class="leg-text">Application → Cluster (reconcile)</span>
+    <span class="leg-text">ArgoCD → Cluster (apply changes)</span>
+  </div>
+  <div class="leg-row">
+    <span class="leg-line" style="background:#60A5FA;box-shadow:0 0 6px #60A5FA;"></span>
+    <span class="leg-text">Cluster → ArgoCD (actual state)</span>
   </div>
 </div>
 
@@ -100,7 +109,7 @@
 <script>
 'use strict';
 
-// ─── Canvas ────────────────────────────────────────────────────────────────────
+// ─── Canvas & DPR ─────────────────────────────────────────────────────────────
 const canvas = document.getElementById('c');
 const ctx    = canvas.getContext('2d');
 let W = 0, H = 0;
@@ -125,94 +134,122 @@ _argoImg.onload = () => {
 };
 _argoImg.src = 'argocd-icon.svg';
 
-// Draw [icon  text] as a centred unit at (cx, cy)
-function drawArgoLabel(cx, cy, text, font, color, op, iconSz) {
-  if (iconSz === undefined) iconSz = 15;
-  ctx.save();
-  ctx.font = font;
-  const tw     = ctx.measureText(text).width;
-  const gap    = 5;
-  const totalW = iconSz + gap + tw;
-  const ix     = cx - totalW / 2;
-  ctx.globalAlpha  = op;
-  ctx.shadowBlur   = 0;
-  if (_argoOC) ctx.drawImage(_argoOC, ix, cy - iconSz / 2, iconSz, iconSz);
-  ctx.fillStyle    = color;
-  ctx.textAlign    = 'left';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, ix + iconSz + gap, cy);
-  ctx.restore();
-}
+// ─── ArgoCD container box bounds (relative) ───────────────────────────────────
+// All internal components live inside this box
+const BOX = { x1:0.06, y1:0.22, x2:0.94, y2:0.77 };
 
-// ─── ArgoCD box bounds ────────────────────────────────────────────────────────
-const BOX = { x1:0.08, y1:0.26, x2:0.92, y2:0.73 };
-
-// ─── Nodes ────────────────────────────────────────────────────────────────────
+// ─── Node Definitions ─────────────────────────────────────────────────────────
+// Layout: Git/Apps at TOP, ArgoCD container MIDDLE, Clusters BOTTOM
 const NODES = {
-  // Top: generic API Server
-  apiserver: { rx:0.50, ry:0.09, type:'apiserver', label:'API Server', sub:'Returns parameter sets', step:0 },
+  // ── TOP: Git repos / Applications ───────────────────────────────────────────
+  git1: { rx:0.22, ry:0.11, type:'git',     label:'Git Repo', step:0 },
+  git2: { rx:0.50, ry:0.09, type:'git',     label:'Git Repo', step:0 },
+  git3: { rx:0.78, ry:0.11, type:'git',     label:'Git Repo', step:0 },
+  git4: { rx:0.08, ry:0.14, type:'git',     label:'Git Repo', step:2 },
+  git5: { rx:0.92, ry:0.14, type:'git',     label:'Git Repo', step:2 },
 
-  // Inside ArgoCD box: ApplicationSet
-  appset:    { rx:0.50, ry:0.41, type:'appset', label:'ApplicationSet', sub:'Plugin Generator', step:0 },
+  // ── MIDDLE (inside ArgoCD box): Internal components ──────────────────────────
+  apiserver: { rx:0.50, ry:0.31, type:'apiserver', label:'API Server',      sub:'Request entry point',    step:0 },
+  redis:     { rx:0.50, ry:0.46, type:'redis',     label:'Redis',           sub:'Shared cache & state',   step:0 },
+  appctrl:   { rx:0.50, ry:0.61, type:'appctrl',   label:'App Controller',  sub:'Reconciliation Engine',  step:0, fadeStep:5 },
+  reposrv:   { rx:0.27, ry:0.68, type:'repo',      label:'Repo Server',     sub:'Git · Manifests',        step:0 },
+  etcd:      { rx:0.73, ry:0.68, type:'etcd',      label:'etcd / K8s API',  sub:'Shared store',           step:0 },
 
-  // Generated Applications (appear at step 3)
-  app1: { rx:0.28, ry:0.60, type:'genapp', label:'Application', step:3 },
-  app2: { rx:0.50, ry:0.62, type:'genapp', label:'Application', step:3 },
-  app3: { rx:0.72, ry:0.60, type:'genapp', label:'Application', step:3 },
+  // Shards replace appctrl at step 5 (still inside box)
+  shard1:    { rx:0.35, ry:0.61, type:'shard',     label:'App Controller',  sub:'Shard 1',                step:5 },
+  shard2:    { rx:0.65, ry:0.61, type:'shard',     label:'App Controller',  sub:'Shard 2',                step:5 },
 
-  // More apps (step 5 — API data changes)
-  app4: { rx:0.14, ry:0.58, type:'genapp', label:'Application', step:5 },
-  app5: { rx:0.86, ry:0.58, type:'genapp', label:'Application', step:5 },
-
-  // Destination clusters (always visible)
-  dc1: { rx:0.22, ry:0.86, type:'cluster', step:0 },
-  dc2: { rx:0.50, ry:0.88, type:'cluster', step:0 },
-  dc3: { rx:0.78, ry:0.86, type:'cluster', step:0 },
-
-  // More clusters (step 5)
-  dc4: { rx:0.08, ry:0.84, type:'cluster', step:5 },
-  dc5: { rx:0.92, ry:0.84, type:'cluster', step:5 },
+  // ── BOTTOM: Destination clusters ─────────────────────────────────────────────
+  dc1: { rx:0.22, ry:0.88, type:'cluster', label:'K8s Cluster', step:0 },
+  dc2: { rx:0.50, ry:0.90, type:'cluster', label:'K8s Cluster', step:0 },
+  dc3: { rx:0.78, ry:0.88, type:'cluster', label:'K8s Cluster', step:0 },
+  dc4: { rx:0.08, ry:0.88, type:'cluster', label:'K8s Cluster', step:3 },
+  dc5: { rx:0.92, ry:0.88, type:'cluster', label:'K8s Cluster', step:3 },
 };
 
 const opacity = {};
 Object.keys(NODES).forEach(k => opacity[k] = 0);
 
+// Heat levels (0–1) — drive glow intensity per node
+const heat = { redis:0, etcd:0, appctrl:0, shard1:0, shard2:0 };
+
 // ─── Connections ──────────────────────────────────────────────────────────────
 const CONNS = [
-  { from:'appset',    to:'apiserver', step:1 },   // poll
-  { from:'apiserver', to:'appset',    step:2 },   // response
+  // Git → API Server (sync trigger)
+  { from:'git1', to:'apiserver', step:0 },
+  { from:'git2', to:'apiserver', step:0 },
+  { from:'git3', to:'apiserver', step:0 },
+  { from:'git4', to:'apiserver', step:2 },
+  { from:'git5', to:'apiserver', step:2 },
 
-  // AppSet → generated Applications (creation, step 3)
-  { from:'appset', to:'app1', step:3 },
-  { from:'appset', to:'app2', step:3 },
-  { from:'appset', to:'app3', step:3 },
-  { from:'appset', to:'app4', step:5 },
-  { from:'appset', to:'app5', step:5 },
+  // API Server ↔ Redis
+  { from:'apiserver', to:'redis',     step:0 },
+  { from:'redis',     to:'apiserver', step:0 },
 
-  { from:'app1', to:'dc1', step:4 },
-  { from:'app2', to:'dc2', step:4 },
-  { from:'app3', to:'dc3', step:4 },
-  { from:'app4', to:'dc4', step:5 },
-  { from:'app5', to:'dc5', step:5 },
+  // Redis ↔ App Controller
+  { from:'redis',   to:'appctrl', step:0 },
+  { from:'appctrl', to:'redis',   step:0 },
+
+  // App Controller ↔ Repo Server
+  { from:'appctrl', to:'reposrv', step:0 },
+  { from:'reposrv', to:'appctrl', step:0 },
+
+  // App Controller ↔ etcd
+  { from:'appctrl', to:'etcd',    step:0 },
+  { from:'etcd',    to:'appctrl', step:0 },
+
+  // App Controller ↔ initial clusters
+  { from:'appctrl', to:'dc1', step:0 },
+  { from:'dc1',     to:'appctrl', step:0 },
+  { from:'appctrl', to:'dc2', step:0 },
+  { from:'dc2',     to:'appctrl', step:0 },
+  { from:'appctrl', to:'dc3', step:0 },
+  { from:'dc3',     to:'appctrl', step:0 },
+
+  // App Controller ↔ extra clusters (step 3)
+  { from:'appctrl', to:'dc4', step:3 },
+  { from:'dc4',     to:'appctrl', step:3 },
+  { from:'appctrl', to:'dc5', step:3 },
+  { from:'dc5',     to:'appctrl', step:3 },
+
+  // Shard 1 connections (step 5)
+  { from:'shard1', to:'redis',  step:5 },
+  { from:'redis',  to:'shard1', step:5 },
+  { from:'shard1', to:'etcd',   step:5 },
+  { from:'etcd',   to:'shard1', step:5 },
+  { from:'shard1', to:'reposrv', step:5 },
+  { from:'shard1', to:'dc1',    step:5 },
+  { from:'dc1',    to:'shard1', step:5 },
+  { from:'shard1', to:'dc2',    step:5 },
+  { from:'dc2',    to:'shard1', step:5 },
+
+  // Shard 2 connections (step 5)
+  { from:'shard2', to:'redis',  step:5 },
+  { from:'redis',  to:'shard2', step:5 },
+  { from:'shard2', to:'etcd',   step:5 },
+  { from:'etcd',   to:'shard2', step:5 },
+  { from:'shard2', to:'dc3',    step:5 },
+  { from:'dc3',    to:'shard2', step:5 },
+  { from:'shard2', to:'dc4',    step:5 },
+  { from:'dc4',    to:'shard2', step:5 },
 ];
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let step       = 0;
-const MAX_STEPS = 7; // 0–6
+const MAX_STEPS = 7;  // 0–6
 let particles  = [];
 let frozen     = false;
 let t          = 0;
 let pulse      = 0;
-let serverPulse = 0;  // spikes when API server "updates" at step 5
 
-// ─── Particle ──────────────────────────────────────────────────────────────────
+// ─── Particle ─────────────────────────────────────────────────────────────────
 class Particle {
   constructor(from, to, col) {
     this.from = from; this.to = to; this.col = col;
     this.p    = 0;
-    this.spd  = 0.007 + Math.random() * 0.004;
-    this.r    = 2.0 + Math.random() * 1.4;
-    this.bow  = { x:(Math.random()-.5)*.08, y:(Math.random()-.5)*.06 };
+    this.spd  = 0.006 + Math.random() * 0.004;
+    this.r    = 2.2 + Math.random() * 1.6;
+    this.bow  = { x:(Math.random()-.5)*0.10, y:(Math.random()-.5)*0.07 };
     this.alive = true;
   }
   pos() {
@@ -224,87 +261,93 @@ class Particle {
     return { x:u*u*fx+2*u*this.p*cx+this.p*this.p*tx,
              y:u*u*fy+2*u*this.p*cy+this.p*this.p*ty };
   }
-  update() { this.p+=this.spd; if(this.p>=1) this.alive=false; }
+  update() { this.p += this.spd; if(this.p>=1) this.alive=false; }
   draw() {
-    const {x,y}=this.pos();
-    const alpha=Math.sin(this.p*Math.PI);
+    const { x, y } = this.pos();
+    const alpha = Math.sin(this.p * Math.PI);
     ctx.save();
-    ctx.globalAlpha=alpha*0.35;
-    ctx.fillStyle=this.col; ctx.shadowColor=this.col; ctx.shadowBlur=14;
+    ctx.globalAlpha = alpha * 0.35;
+    ctx.fillStyle = this.col; ctx.shadowColor = this.col; ctx.shadowBlur = 14;
     ctx.beginPath(); ctx.arc(x,y,this.r*2.5,0,Math.PI*2); ctx.fill();
-    ctx.globalAlpha=alpha*0.92; ctx.shadowBlur=4;
+    ctx.globalAlpha = alpha * 0.92; ctx.shadowBlur = 4;
     ctx.beginPath(); ctx.arc(x,y,this.r,0,Math.PI*2); ctx.fill();
     ctx.restore();
   }
 }
 
-// ─── Particle colour ───────────────────────────────────────────────────────────
+// ─── Particle colour per connection ───────────────────────────────────────────
 function pColor(from, to) {
-  if (from==='appset'    && to==='apiserver') return '#60A5FA'; // poll: blue
-  if (from==='apiserver' && to==='appset')    return '#F59E0B'; // response: amber
-  if (from==='appset'    && to.startsWith('app')) return '#A78BFA'; // creation: violet
-  if (to==='dc1'||to==='dc2'||to==='dc3'||to==='dc4'||to==='dc5') return '#4ADE80'; // reconcile: green
+  if (step >= 4) return '#FB923C';   // all orange under pressure
+  // Git → API Server: amber (sync trigger)
+  const ft = NODES[from].type;
+  if (ft === 'git') return '#F59E0B';
+  // API Server / Redis: blue coordination
+  if (from==='apiserver'||to==='apiserver') return '#60A5FA';
+  if (from==='redis'    ||to==='redis')     return '#F59E0B';
+  // App Controller → Repo Server: violet (manifest request)
+  if ((from==='appctrl'||from==='shard1'||from==='shard2') && to==='reposrv') return '#A78BFA';
+  if (from==='reposrv') return '#C4B5FD';
+  // App Controller ↔ etcd: teal
+  if (to==='etcd')      return '#34D399';
+  if (from==='etcd')    return '#6EE7B7';
+  // → Cluster: green apply; ← Cluster: blue status
+  if (to==='dc1'||to==='dc2'||to==='dc3'||to==='dc4'||to==='dc5') return '#4ADE80';
+  if (from==='dc1'||from==='dc2'||from==='dc3'||from==='dc4'||from==='dc5') return '#60A5FA';
   return '#60A5FA';
 }
 
-// ─── Spawn logic — step-aware ──────────────────────────────────────────────────
-function spawnProbFor(c) {
-  if (frozen || step === 0 || step >= 6) return 0;
-  const isPoll     = c.from==='appset'    && c.to==='apiserver';
-  const isResponse = c.from==='apiserver' && c.to==='appset';
-  const isCreation = c.from==='appset'    && c.to.startsWith('app');
-  const isReconcile= c.to.startsWith('dc');
+// ─── Spawn probability per step ───────────────────────────────────────────────
+function spawnProb() {
+  return [0.003, 0.008, 0.018, 0.030, 0.060, 0.060, 0, 0][Math.min(step,7)];
+}
 
-  if (step === 1) return isPoll ? 0.028 : 0;
-  if (step === 2) {
-    if (isResponse) return 0.028;
-    if (isPoll)     return 0.006;
-    return 0;
-  }
-  if (step === 3) {
-    if (isCreation) return 0.030;  // burst: appset creates apps
-    if (isResponse||isPoll) return 0.005;
-    return 0;
-  }
-  if (step === 4) {
-    if (isReconcile) return 0.020;
-    if (isCreation)  return 0.006; // trickle: appset still owns apps
-    if (isResponse||isPoll) return 0.004;
-    return 0;
-  }
-  if (step === 5) {
-    if (isReconcile) return 0.020;
-    if (isCreation)  return 0.022; // new apps being created
-    if (isResponse)  return 0.014;
-    if (isPoll)      return 0.008;
-    return 0;
-  }
-  return 0;
+// ─── Active connections ────────────────────────────────────────────────────────
+function activeConns() {
+  if (frozen) return [];
+  return CONNS.filter(c => {
+    if (c.step > step) return false;
+    if (step>=5 && (c.from==='appctrl'||c.to==='appctrl')) return false;
+    return true;
+  });
 }
 
 function maybeSpawn() {
-  CONNS.forEach(c => {
-    if (c.step > step) return;
+  const prob = spawnProb(); if (!prob) return;
+  activeConns().forEach(c => {
     const fo=opacity[c.from]||0, to=opacity[c.to]||0;
     if (fo<0.35||to<0.35) return;
-    const prob = spawnProbFor(c);
-    if (prob && Math.random()<prob)
-      particles.push(new Particle(c.from, c.to, pColor(c.from, c.to)));
+    if (Math.random()<prob) particles.push(new Particle(c.from, c.to, pColor(c.from, c.to)));
   });
+}
+
+// ─── Heat targets per step ────────────────────────────────────────────────────
+function heatTargets() {
+  const h = { redis:0, etcd:0, appctrl:0, shard1:0, shard2:0 };
+  if (step>=1) { h.redis=0.15; h.etcd=0.10; h.appctrl=0.18; }
+  if (step>=2) { h.redis=0.35; h.etcd=0.25; h.appctrl=0.48; }
+  if (step>=3) { h.redis=0.58; h.etcd=0.48; h.appctrl=0.70; }
+  if (step>=4) { h.redis=0.93; h.etcd=0.88; h.appctrl=0.96; }
+  if (step>=5) { h.redis=0.95; h.etcd=0.90; h.appctrl=0; h.shard1=0.72; h.shard2=0.72; }
+  return h;
+}
+function updateHeat() {
+  const tgt=heatTargets();
+  Object.keys(heat).forEach(k => heat[k]+=(tgt[k]-heat[k])*0.022);
 }
 
 // ─── Opacity targets ──────────────────────────────────────────────────────────
 function opTarget(key) {
-  const n=NODES[key];
+  const n = NODES[key];
   if (n.step > step) return 0;
-  if (step >= 6) return 0.12;
+  if (key==='appctrl' && step>=5) return 0;
+  if (step>=6) return 0.12;
   return 1;
 }
 function updateOpacity() {
-  Object.keys(NODES).forEach(k => { opacity[k]+=(opTarget(k)-opacity[k])*0.028; });
+  Object.keys(NODES).forEach(k => { opacity[k]+=(opTarget(k)-opacity[k])*0.025; });
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Rounded rect helper ──────────────────────────────────────────────────────
 function rr(x,y,w,h,r) {
   ctx.beginPath();
   ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
@@ -314,90 +357,63 @@ function rr(x,y,w,h,r) {
   ctx.closePath();
 }
 
-// Pill label with monospace text
-function drawPill(text, x, y, col, alpha) {
-  if (alpha < 0.02) return;
-  ctx.save();
-  ctx.font = '500 10.5px "Courier New",Courier,monospace';
-  const tw = ctx.measureText(text).width;
-  const pw = tw + 18, ph = 22;
-  ctx.globalAlpha = alpha * 0.90;
-  ctx.fillStyle = 'rgba(6,10,20,0.92)';
-  rr(x - pw/2, y - ph/2, pw, ph, 5); ctx.fill();
-  ctx.strokeStyle = `${col}66`; ctx.lineWidth = 1;
-  rr(x - pw/2, y - ph/2, pw, ph, 5); ctx.stroke();
-  ctx.fillStyle = col;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(text, x, y);
-  ctx.restore();
-}
-
-// ─── Background ───────────────────────────────────────────────────────────────
+// ─── Draw background ──────────────────────────────────────────────────────────
 function drawBg() {
   ctx.fillStyle='#080B12'; ctx.fillRect(0,0,W,H);
-  // Subtle blue glow around ArgoCD box
-  const gx=0.50*W, gy=0.50*H, gr=Math.min(W,H)*0.52;
+  const hv=Math.max(heat.appctrl,heat.redis);
+  const gx=0.50*W, gy=0.50*H, gr=Math.min(W,H)*0.55;
   const g=ctx.createRadialGradient(gx,gy,0,gx,gy,gr);
-  g.addColorStop(0,'rgba(5,20,50,0.14)');
-  g.addColorStop(0.5,'rgba(3,12,30,0.06)');
+  if(hv>0.4){
+    g.addColorStop(0,`rgba(90,28,5,${hv*0.15})`);
+    g.addColorStop(0.5,`rgba(45,14,2,${hv*0.07})`);
+  } else {
+    g.addColorStop(0,'rgba(5,20,50,0.14)');
+    g.addColorStop(0.5,'rgba(3,12,30,0.06)');
+  }
   g.addColorStop(1,'rgba(0,0,0,0)');
   ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
 }
 
-// ─── ArgoCD box ───────────────────────────────────────────────────────────────
+// ─── Draw ArgoCD container box ────────────────────────────────────────────────
 function drawArgoBox() {
   const bx=BOX.x1*W, by=BOX.y1*H;
   const bw=(BOX.x2-BOX.x1)*W, bh=(BOX.y2-BOX.y1)*H;
-  const hdrH = 34; // header band height
-  const intOp=Math.max(opacity.appset||0, opacity.app1||0);
+  const intOp=Math.max(opacity.apiserver||0,opacity.redis||0,opacity.appctrl||0,
+                       opacity.reposrv||0,opacity.etcd||0,opacity.shard1||0,opacity.shard2||0);
   if(intOp<0.01) return;
-  ctx.save();
+  const hv=Math.max(heat.redis,heat.appctrl);
+  const bcol=hv>0.5?`rgba(251,146,60,${(0.22+hv*0.38)*intOp})`:`rgba(96,165,250,${0.28*intOp})`;
 
-  // Subtle body fill
-  ctx.globalAlpha=intOp*0.030;
-  ctx.fillStyle='#3B82F6';
+  ctx.save();
+  // Subtle fill
+  ctx.globalAlpha=intOp*(hv>0.5?0.035+hv*0.025:0.025);
+  ctx.fillStyle=hv>0.5?'#FB923C':'#3B82F6';
   rr(bx,by,bw,bh,18); ctx.fill();
 
-  // Header band — top portion filled more prominently
-  ctx.globalAlpha=intOp*0.12;
-  ctx.fillStyle='#1D4ED8';
-  // Clip to top-rounded only: draw a path covering top corners + rect body
-  ctx.beginPath();
-  ctx.moveTo(bx+18, by);
-  ctx.lineTo(bx+bw-18, by);
-  ctx.quadraticCurveTo(bx+bw, by, bx+bw, by+18);
-  ctx.lineTo(bx+bw, by+hdrH);
-  ctx.lineTo(bx, by+hdrH);
-  ctx.lineTo(bx, by+18);
-  ctx.quadraticCurveTo(bx, by, bx+18, by);
-  ctx.closePath();
-  ctx.fill();
-
-  // Separator line below header
-  ctx.globalAlpha=intOp*0.20;
-  ctx.strokeStyle='rgba(96,165,250,0.5)'; ctx.lineWidth=1;
-  ctx.setLineDash([]);
-  ctx.beginPath();
-  ctx.moveTo(bx+1, by+hdrH); ctx.lineTo(bx+bw-1, by+hdrH);
-  ctx.stroke();
-
-  // Full box border (dashed)
-  ctx.globalAlpha=intOp*0.32;
-  ctx.strokeStyle='rgba(96,165,250,0.60)'; ctx.lineWidth=1.5;
+  // Border (dashed)
+  ctx.globalAlpha=1;
+  ctx.strokeStyle=bcol; ctx.lineWidth=1.5;
   ctx.setLineDash([8,12]);
   rr(bx,by,bw,bh,18); ctx.stroke();
   ctx.setLineDash([]);
 
+  // "ArgoCD" label at top-left corner of box — icon + text inline
+  ctx.globalAlpha=intOp*(hv>0.5?0.70:0.50);
+  ctx.shadowBlur=0;
+  if(_argoOC) ctx.drawImage(_argoOC, bx+14, by+7, 13, 13);
+  ctx.fillStyle=hv>0.5?'#FB923C':'#93C5FD';
+  ctx.font='600 11px Inter,sans-serif';
+  ctx.textAlign='left'; ctx.textBaseline='top';
+  ctx.fillText('ArgoCD', bx+31, by+10);
   ctx.restore();
-  // Header label — ArgoCD icon + text centred as a unit
-  drawArgoLabel(bx+bw/2, by+hdrH/2, 'ArgoCD', '700 14px Inter,sans-serif', '#93C5FD', intOp*0.80, 15);
 }
 
-// ─── Connection lines ──────────────────────────────────────────────────────────
+// ─── Draw connection lines (animated dashes) ──────────────────────────────────
 function drawLines() {
   const drawn=new Set();
   CONNS.forEach(c => {
     if(c.step>step) return;
+    if(step>=5&&(c.from==='appctrl'||c.to==='appctrl')) return;
     const key=[c.from,c.to].sort().join('|');
     if(drawn.has(key)) return; drawn.add(key);
     const fo=opacity[c.from]||0, to2=opacity[c.to]||0;
@@ -415,105 +431,146 @@ function drawLines() {
   });
 }
 
-// ─── Arrow annotation labels ───────────────────────────────────────────────────
-function drawArrowLabels() {
-  const ax=NODES.apiserver.rx*W, ay=NODES.apiserver.ry*H;
-  const sx=NODES.appset.rx*W,    sy=NODES.appset.ry*H;
-  const mx=(ax+sx)/2, my=(ay+sy)/2;
-  // Offset labels to right of the vertical arrow
-  const ox = Math.min(W*0.16, 135);
-
-  // POST request label — visible step 1+
-  const reqAlpha = step>=1 ? Math.min(opacity.apiserver, 1) : 0;
-  if(reqAlpha>0.02)
-    drawPill('POST  /api/v1/getparams.execute', mx+ox, my-14, '#60A5FA', reqAlpha*(step===1?1:0.45));
-
-  // Response label — visible step 2+
-  const resAlpha = step>=2 ? Math.min(opacity.apiserver, 1) : 0;
-  if(resAlpha>0.02)
-    drawPill('[{name, cluster, env…}, …]', mx+ox, my+14, '#F59E0B', resAlpha);
-}
-
-// ─── "New data" badge on API server (step 5) ──────────────────────────────────
-function drawNewDataBadge() {
-  if(serverPulse<0.02) return;
-  const x=NODES.apiserver.rx*W, y=NODES.apiserver.ry*H;
-  ctx.save();
-  ctx.globalAlpha=serverPulse*0.9;
-  ctx.fillStyle='#4ADE80'; ctx.font='600 10px Inter,sans-serif';
-  ctx.textAlign='left'; ctx.textBaseline='middle';
-  ctx.shadowColor='#4ADE80'; ctx.shadowBlur=10;
-  ctx.fillText('● data updated', x+80, y-4);
-  ctx.restore();
-}
-
-// ─── Node draw functions ───────────────────────────────────────────────────────
+// ─── Node size lookup ─────────────────────────────────────────────────────────
 function sz(type) {
-  return { apiserver:[152,54], appset:[170,64], genapp:[114,40], cluster:[120,48] }[type] || [130,50];
+  const map={git:[96,36],apiserver:[132,50],redis:[134,54],
+             appctrl:[168,66],repo:[126,48],etcd:[142,48],
+             cluster:[120,48],shard:[138,58]};
+  return map[type]||[120,46];
+}
+
+// ─── Individual node draw functions ───────────────────────────────────────────
+function drawGit(x,y,op) {
+  const [w,h]=sz('git'), px=x-w/2, py=y-h/2;
+  ctx.save(); ctx.globalAlpha=op;
+  ctx.shadowColor='rgba(6,182,212,0.35)'; ctx.shadowBlur=12;
+  ctx.fillStyle='rgba(0,18,26,0.93)'; rr(px,py,w,h,8); ctx.fill();
+  ctx.shadowBlur=0; ctx.strokeStyle='rgba(6,182,212,0.55)'; ctx.lineWidth=1;
+  rr(px,py,w,h,8); ctx.stroke();
+  ctx.fillStyle='rgba(103,232,249,0.90)'; ctx.font='500 11px Inter,sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('Git Repo', x, y);
+  ctx.restore();
 }
 
 function drawAPIServer(x,y,op) {
   const [w,h]=sz('apiserver'), px=x-w/2, py=y-h/2;
-  const sp=serverPulse;
-  const bl=16+sp*20+Math.sin(pulse*0.7)*4;
   ctx.save(); ctx.globalAlpha=op;
-  ctx.shadowColor=sp>0.1?'rgba(74,222,128,0.55)':'rgba(96,165,250,0.40)';
-  ctx.shadowBlur=bl;
-  ctx.fillStyle='rgba(6,18,45,0.97)'; rr(px,py,w,h,10); ctx.fill();
-  ctx.shadowBlur=0;
-  ctx.strokeStyle=sp>0.1?`rgba(74,222,128,${0.5+sp*0.5})`:'rgba(96,165,250,0.68)';
-  ctx.lineWidth=1.5; rr(px,py,w,h,10); ctx.stroke();
+  ctx.shadowColor='rgba(96,165,250,0.40)'; ctx.shadowBlur=16;
+  ctx.fillStyle='rgba(6,18,45,0.96)'; rr(px,py,w,h,10); ctx.fill();
+  ctx.shadowBlur=0; ctx.strokeStyle='rgba(96,165,250,0.68)'; ctx.lineWidth=1.5;
+  rr(px,py,w,h,10); ctx.stroke();
   ctx.fillStyle='#93C5FD'; ctx.font='600 13px Inter,sans-serif';
   ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText('API Server',x,y-6);
   ctx.fillStyle='rgba(147,197,253,0.48)'; ctx.font='500 10px Inter,sans-serif';
-  ctx.fillText('Returns parameter sets',x,y+7);
+  ctx.fillText('Request entry point',x,y+7);
   ctx.restore();
 }
 
-function drawAppSet(x,y,op) {
-  const [w,h]=sz('appset'), px=x-w/2, py=y-h/2;
-  const bl=18+Math.sin(pulse*0.8)*5;
+function drawRedis(x,y,op) {
+  const [w,h]=sz('redis'), px=x-w/2, py=y-h/2;
+  const hv=heat.redis;
+  const sc=hv>0.6?'rgba(248,113,113,0.65)':'rgba(239,68,68,0.30)';
+  const bl=18+hv*22+Math.sin(pulse*1.4)*5;
   ctx.save(); ctx.globalAlpha=op;
-  ctx.shadowColor='rgba(167,139,250,0.50)'; ctx.shadowBlur=bl;
-  ctx.fillStyle='rgba(14,8,32,0.97)'; rr(px,py,w,h,12); ctx.fill();
-  ctx.shadowBlur=0; ctx.strokeStyle='rgba(139,92,246,0.75)'; ctx.lineWidth=2;
+  ctx.shadowColor=sc; ctx.shadowBlur=bl;
+  ctx.fillStyle='rgba(28,6,6,0.97)'; rr(px,py,w,h,10); ctx.fill();
+  if(hv>0.5){ctx.shadowBlur=bl*1.5; rr(px,py,w,h,10); ctx.fill();}
+  ctx.shadowBlur=0; ctx.strokeStyle=`rgba(239,68,68,${.5+hv*.45})`; ctx.lineWidth=1.5;
+  rr(px,py,w,h,10); ctx.stroke();
+  ctx.fillStyle=hv>0.6?'#F87171':'#FCA5A5'; ctx.font='700 13px Inter,sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('Redis',x,y-6);
+  ctx.fillStyle='rgba(252,165,165,0.50)'; ctx.font='500 10px Inter,sans-serif';
+  ctx.fillText('Shared cache & state',x,y+7);
+  ctx.restore();
+}
+
+function drawAppCtrl(x,y,op) {
+  const [w,h]=sz('appctrl'), px=x-w/2, py=y-h/2;
+  const hv=heat.appctrl;
+  const gc=hv>0.7?'#FB923C':'#F59E0B';
+  const bl=24+hv*26+Math.sin(pulse)*6;
+  ctx.save(); ctx.globalAlpha=op;
+  ctx.shadowColor=gc; ctx.shadowBlur=bl;
+  ctx.fillStyle='rgba(22,10,2,0.97)'; rr(px,py,w,h,12); ctx.fill();
+  if(hv>0.5){ctx.shadowBlur=bl*1.5; rr(px,py,w,h,12); ctx.fill();}
+  ctx.shadowBlur=0; ctx.strokeStyle=`rgba(245,158,11,${.6+hv*.4})`; ctx.lineWidth=2;
   rr(px,py,w,h,12); ctx.stroke();
-  ctx.fillStyle='#C4B5FD'; ctx.font='700 14px Inter,sans-serif';
+  ctx.fillStyle='#FDE68A'; ctx.font='700 14px Inter,sans-serif';
   ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText('ApplicationSet',x,y-8);
-  ctx.fillStyle='rgba(196,181,253,0.50)'; ctx.font='500 10.5px Inter,sans-serif';
-  ctx.fillText('Plugin Generator',x,y+8);
+  ctx.fillText('App Controller',x,y-9);
+  ctx.fillStyle='rgba(253,230,138,0.55)'; ctx.font='500 10.5px Inter,sans-serif';
+  ctx.fillText('Reconciliation Engine',x,y+8);
   ctx.restore();
 }
 
-function drawGenApp(x,y,op) {
-  const [w,h]=sz('genapp'), px=x-w/2, py=y-h/2;
+function drawShard(key,x,y,op) {
+  const [w,h]=sz('shard'), px=x-w/2, py=y-h/2;
+  const hv=heat[key]||0;
+  const bl=14+hv*18+Math.sin(pulse)*4;
   ctx.save(); ctx.globalAlpha=op;
-  ctx.shadowColor='rgba(52,211,153,0.35)'; ctx.shadowBlur=12;
-  ctx.fillStyle='rgba(3,18,12,0.96)'; rr(px,py,w,h,8); ctx.fill();
-  ctx.shadowBlur=0; ctx.strokeStyle='rgba(52,211,153,0.60)'; ctx.lineWidth=1;
-  rr(px,py,w,h,8); ctx.stroke();
-  ctx.fillStyle='#6EE7B7'; ctx.font='500 11px Inter,sans-serif';
+  ctx.shadowColor='rgba(245,158,11,0.5)'; ctx.shadowBlur=bl;
+  ctx.fillStyle='rgba(22,10,2,0.96)'; rr(px,py,w,h,10); ctx.fill();
+  ctx.shadowBlur=0; ctx.strokeStyle=`rgba(245,158,11,${.5+hv*.4})`; ctx.lineWidth=1.5;
+  rr(px,py,w,h,10); ctx.stroke();
+  const n=NODES[key];
+  ctx.fillStyle='#FDE68A'; ctx.font='600 12px Inter,sans-serif';
   ctx.textAlign='center'; ctx.textBaseline='middle';
-  ctx.fillText('Application',x,y);
+  ctx.fillText(n.label,x,y-7);
+  ctx.fillStyle='rgba(253,230,138,0.55)'; ctx.font='500 10px Inter,sans-serif';
+  ctx.fillText(n.sub,x,y+7);
+  ctx.restore();
+}
+
+function drawRepo(x,y,op) {
+  const [w,h]=sz('repo'), px=x-w/2, py=y-h/2;
+  ctx.save(); ctx.globalAlpha=op;
+  ctx.shadowColor='rgba(167,139,250,0.38)'; ctx.shadowBlur=14;
+  ctx.fillStyle='rgba(12,6,28,0.96)'; rr(px,py,w,h,10); ctx.fill();
+  ctx.shadowBlur=0; ctx.strokeStyle='rgba(167,139,250,0.65)'; ctx.lineWidth=1.5;
+  rr(px,py,w,h,10); ctx.stroke();
+  ctx.fillStyle='#C4B5FD'; ctx.font='600 12px Inter,sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('Repo Server',x,y-6);
+  ctx.fillStyle='rgba(196,181,253,0.50)'; ctx.font='500 10px Inter,sans-serif';
+  ctx.fillText('Git · Manifests',x,y+7);
+  ctx.restore();
+}
+
+function drawEtcd(x,y,op) {
+  const [w,h]=sz('etcd'), px=x-w/2, py=y-h/2;
+  const hv=heat.etcd;
+  const sc=hv>0.5?'rgba(52,211,153,0.55)':'rgba(52,211,153,0.25)';
+  const bl=14+hv*16+Math.sin(pulse*0.9)*3;
+  ctx.save(); ctx.globalAlpha=op;
+  ctx.shadowColor=sc; ctx.shadowBlur=bl;
+  ctx.fillStyle='rgba(3,16,10,0.97)'; rr(px,py,w,h,10); ctx.fill();
+  ctx.shadowBlur=0; ctx.strokeStyle=`rgba(52,211,153,${.45+hv*.45})`; ctx.lineWidth=1.5;
+  rr(px,py,w,h,10); ctx.stroke();
+  ctx.fillStyle='#6EE7B7'; ctx.font='600 12px Inter,sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('etcd / K8s API',x,y-6);
+  ctx.fillStyle='rgba(110,231,183,0.50)'; ctx.font='500 10px Inter,sans-serif';
+  ctx.fillText('Shared store',x,y+7);
   ctx.restore();
 }
 
 function drawCluster(x,y,op) {
   const [w,h]=sz('cluster'), px=x-w/2, py=y-h/2;
   ctx.save(); ctx.globalAlpha=op;
-  ctx.shadowColor='rgba(59,130,246,0.38)'; ctx.shadowBlur=12;
+  ctx.shadowColor='rgba(59,130,246,0.40)'; ctx.shadowBlur=14;
   ctx.fillStyle='rgba(6,15,40,0.96)'; rr(px,py,w,h,9); ctx.fill();
-  ctx.shadowBlur=0; ctx.strokeStyle='rgba(59,130,246,0.62)'; ctx.lineWidth=1;
+  ctx.shadowBlur=0; ctx.strokeStyle='rgba(59,130,246,0.65)'; ctx.lineWidth=1;
   rr(px,py,w,h,9); ctx.stroke();
   ctx.fillStyle='rgba(147,197,253,0.85)'; ctx.font='500 11px Inter,sans-serif';
   ctx.textAlign='center'; ctx.textBaseline='middle';
   ctx.fillText('K8s Cluster',x,py+15);
-  const nd=3, sp2=11, sx2=x-((nd-1)*sp2)/2, dy=py+h-13;
+  const nd=step>=3?4:3, sp=11, sx=x-((nd-1)*sp)/2, dy=py+h-13;
   for(let i=0;i<nd;i++){
-    ctx.fillStyle='rgba(96,165,250,0.72)'; ctx.shadowColor='rgba(96,165,250,0.4)'; ctx.shadowBlur=3;
-    ctx.beginPath(); ctx.arc(sx2+i*sp2,dy,2.8,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(96,165,250,0.72)'; ctx.shadowColor='rgba(96,165,250,0.45)'; ctx.shadowBlur=4;
+    ctx.beginPath(); ctx.arc(sx+i*sp,dy,3,0,Math.PI*2); ctx.fill();
   }
   ctx.restore();
 }
@@ -523,51 +580,73 @@ function drawNodes() {
     const op=opacity[k]; if(op<0.01) return;
     const x=n.rx*W, y=n.ry*H;
     switch(n.type){
-      case 'apiserver': drawAPIServer(x,y,op); break;
-      case 'appset':    drawAppSet(x,y,op); break;
-      case 'genapp':    drawGenApp(x,y,op); break;
-      case 'cluster':   drawCluster(x,y,op); break;
+      case 'git':      drawGit(x,y,op); break;
+      case 'apiserver':drawAPIServer(x,y,op); break;
+      case 'redis':    drawRedis(x,y,op); break;
+      case 'appctrl':  drawAppCtrl(x,y,op); break;
+      case 'shard':    drawShard(k,x,y,op); break;
+      case 'repo':     drawRepo(x,y,op); break;
+      case 'etcd':     drawEtcd(x,y,op); break;
+      case 'cluster':  drawCluster(x,y,op); break;
     }
   });
 }
 
-// ─── Step labels ──────────────────────────────────────────────────────────────
+// ─── "STILL SHARED" bracket annotation (step 5) ───────────────────────────────
+function drawSharedAnnotation() {
+  if(step<5) return;
+  const alpha=Math.min(1,(opacity.shard1+opacity.shard2)/2);
+  if(alpha<0.1) return;
+  // Bracket spanning Redis and etcd from the right side of the box
+  const rx=NODES.redis.rx*W, ry=NODES.redis.ry*H;
+  const ex=NODES.etcd.rx*W,  ey=NODES.etcd.ry*H;
+  const bx=BOX.x2*W-24, cy=(ry+ey)/2;
+  ctx.save();
+  ctx.globalAlpha=alpha*0.75;
+  ctx.strokeStyle='#F87171'; ctx.lineWidth=1.5;
+  ctx.setLineDash([4,5]);
+  ctx.beginPath();
+  ctx.moveTo(bx-50,ry-26); ctx.lineTo(bx,ry-26);
+  ctx.lineTo(bx,ey+26); ctx.lineTo(bx-50,ey+26);
+  ctx.stroke(); ctx.setLineDash([]);
+  ctx.fillStyle='#F87171'; ctx.font='600 10.5px Inter,sans-serif';
+  ctx.textAlign='left'; ctx.textBaseline='middle';
+  ctx.fillText('STILL SHARED', bx+8, cy);
+  ctx.restore();
+}
+
+// ─── Narrative & step label ───────────────────────────────────────────────────
 const LABELS = [
-  'ApplicationSet Plugin Generator — how it works',
-  'ArgoCD polls your API server periodically',
-  'Your API returns a list of parameter sets',
-  'One Application is created per parameter set',
-  'Each Application reconciles to its destination cluster',
-  'API data changes → ArgoCD adapts on the next poll',
+  'All components — calm steady state',
+  'Reconciliation cycle — Git → ArgoCD → Cluster',
+  'More Git repos — parallel sync load grows',
+  'More clusters — App Controller fans out',
+  'Heavy pressure — Redis and etcd saturated',
+  'App Controller sharding — shared state persists',
   '',
 ];
 
-const stepLabelEl = document.getElementById('step-label');
-function updateStepLabel() {
-  stepLabelEl.textContent = step < 6 ? LABELS[step] : '';
-}
+const narrativeEl = document.getElementById('narrative');
+const narTitle    = document.getElementById('nar-title');
+const narSub      = document.getElementById('nar-sub');
 
-// ─── Narrative & Legend ───────────────────────────────────────────────────────
-const narrativeEl=document.getElementById('narrative');
-const narTitle=document.getElementById('nar-title');
-const narSub=document.getElementById('nar-sub');
-const legendEl=document.getElementById('legend');
+const legendEl = document.getElementById('legend');
+function updateLegend() {
+  legendEl.style.opacity = (step>=1 && step<=4) ? '1' : '0';
+}
 
 function updateNarrative() {
   if(step===6){
-    narTitle.textContent='Your API is the source of truth.';
-    narSub.textContent  ='ArgoCD is the executor.';
+    narTitle.textContent="The bottleneck isn't any one component.";
+    narSub.textContent  ="It's the shared state they all depend on.";
     narrativeEl.classList.add('visible');
   } else {
     narrativeEl.classList.remove('visible');
   }
 }
-function updateLegend() {
-  legendEl.style.opacity=(step>=1&&step<=5)?'1':'0';
-}
 
 // ─── Progress dots ────────────────────────────────────────────────────────────
-const progressEl=document.getElementById('progress');
+const progressEl = document.getElementById('progress');
 for(let i=0;i<MAX_STEPS;i++){
   const d=document.createElement('div');
   d.className='dot'; d.id='dot'+i; progressEl.appendChild(d);
@@ -581,13 +660,10 @@ function updateDots(){
 const hintEl=document.getElementById('hint');
 let hintTimer;
 function advance(){
-  if(step>=MAX_STEPS-1) return;
-  const prev=step;
+  if(step>=MAX_STEPS-1){ window.parent.postMessage({type:'scene-complete'},'*'); return; }
   step++;
-  // Spike API server pulse when data "changes" at step 5
-  if(prev===4&&step===5) serverPulse=1.0;
   if(step>=6){frozen=true; particles=[];}
-  updateDots(); updateNarrative(); updateLegend(); updateStepLabel();
+  updateDots(); updateNarrative(); updateLegend();
   hintEl.classList.remove('hidden');
   clearTimeout(hintTimer);
   hintTimer=setTimeout(()=>hintEl.classList.add('hidden'),3000);
@@ -595,12 +671,12 @@ function advance(){
 document.addEventListener('click', advance);
 document.addEventListener('keydown', e=>{
   if(e.code==='Space'||e.code==='ArrowRight'){e.preventDefault(); advance();}
+  if(e.code==='ArrowLeft'&&step===0){window.parent.postMessage({type:'scene-back'},'*');return;}
   if(e.code==='ArrowLeft'&&step>0){
     step--;
     frozen=step>=6;
     if(!frozen) particles=[];
-    serverPulse=0;
-    updateDots(); updateNarrative(); updateLegend(); updateStepLabel();
+    updateDots(); updateNarrative(); updateLegend();
   }
 });
 
@@ -608,23 +684,27 @@ document.addEventListener('keydown', e=>{
 function loop(){
   requestAnimationFrame(loop);
   t++; pulse+=0.038;
-  // Decay server pulse
-  serverPulse*=0.975;
   updateOpacity();
+  updateHeat();
   maybeSpawn();
   particles=particles.filter(p=>{p.update(); return p.alive;});
   drawBg();
-  drawArgoBox();
+  drawArgoBox();   // box behind nodes
   drawLines();
   particles.forEach(p=>p.draw());
   drawNodes();
-  drawArrowLabels();
-  drawNewDataBadge();
+  drawSharedAnnotation();
 }
 
-updateDots(); updateNarrative(); updateLegend(); updateStepLabel();
+updateDots(); updateNarrative(); updateLegend();
 setTimeout(()=>hintEl.classList.add('hidden'),4000);
 loop();
+
+// ── ArrowUp = prev scene, ArrowDown = next scene ─────────────────────────────
+document.addEventListener('keydown', function(e) {
+  if (e.code === 'ArrowUp')   { e.preventDefault(); window.parent.postMessage({type:'scene-back'},'*'); }
+  if (e.code === 'ArrowDown') { e.preventDefault(); window.parent.postMessage({type:'scene-complete'},'*'); }
+}, true);
 </script>
 </body>
 </html>

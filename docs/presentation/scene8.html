@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scene 8 — Git-Driven Infrastructure</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      background:#080B12; overflow:hidden;
+      width:100vw; height:100vh;
+      font-family:'Inter',-apple-system,sans-serif;
+      cursor:pointer; user-select:none;
+    }
+    canvas { display:block; position:absolute; top:0; left:0; pointer-events:none; }
+    #narrative {
+      position:absolute; inset:0; display:flex; flex-direction:column;
+      align-items:center; justify-content:center;
+      pointer-events:none; opacity:0; transition:opacity 1.2s ease;
+    }
+    #narrative.visible { opacity:1; }
+    #nar-title {
+      color:#fff; font-size:clamp(20px,2.8vw,44px); font-weight:700;
+      letter-spacing:-0.025em; text-align:center; line-height:1.2; max-width:820px; padding:0 40px;
+    }
+    #nar-sub {
+      margin-top:14px; color:rgba(255,255,255,0.42);
+      font-size:clamp(13px,1.4vw,19px); text-align:center; padding:0 40px;
+    }
+    #scene-label {
+      position:absolute; top:28px; left:36px;
+      color:rgba(255,255,255,0.18); font-size:11px;
+      letter-spacing:0.12em; text-transform:uppercase; font-weight:500; pointer-events:none;
+    }
+    #step-label {
+      position:absolute; top:28px; right:36px;
+      color:rgba(255,255,255,0.30); font-size:11.5px; letter-spacing:0.03em;
+      font-weight:500; pointer-events:none; text-align:right; max-width:640px;
+    }
+    #progress {
+      position:absolute; bottom:30px; left:50%; transform:translateX(-50%);
+      display:flex; gap:7px; align-items:center; pointer-events:none;
+    }
+    .dot { width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,0.15); transition:all 0.4s ease; }
+    .dot.active { background:rgba(255,255,255,0.75); width:18px; border-radius:3px; }
+    #hint {
+      position:absolute; bottom:52px; left:50%; transform:translateX(-50%);
+      color:rgba(255,255,255,0.18); font-size:11px; letter-spacing:0.10em;
+      text-transform:uppercase; pointer-events:none; white-space:nowrap; transition:opacity 0.5s;
+    }
+    #hint.hidden { opacity:0; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="narrative"><h1 id="nar-title"></h1><p id="nar-sub"></p></div>
+<div id="scene-label">Scene 8 &nbsp;/&nbsp; Git-Driven Infrastructure</div>
+<div id="step-label"></div>
+<div id="hint">Click or press Space to continue</div>
+<div id="progress"></div>
+
+<script>
+'use strict';
+
+// ─── Canvas ───────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+let W = 0, H = 0;
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width  = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  ctx.scale(dpr, dpr);
+}
+resize(); window.addEventListener('resize', resize);
+
+// ─── ArgoCD icon ──────────────────────────────────────────────────────────────
+const _argoImg = new Image();
+let _argoOC = null;
+_argoImg.onload = () => {
+  const oc = document.createElement('canvas'); oc.width=64; oc.height=64;
+  oc.getContext('2d').drawImage(_argoImg,0,0,64,64); _argoOC=oc;
+};
+_argoImg.src = 'argocd-icon.svg';
+
+function drawArgoLabel(cx, cy, text, font, color, op, iconSz) {
+  if (!iconSz) iconSz=14;
+  ctx.save(); ctx.font=font;
+  const tw=ctx.measureText(text).width, gap=5, totalW=iconSz+gap+tw;
+  const ix=cx-totalW/2;
+  ctx.globalAlpha=op; ctx.shadowBlur=0;
+  if (_argoOC) ctx.drawImage(_argoOC,ix,cy-iconSz/2,iconSz,iconSz);
+  ctx.fillStyle=color; ctx.textAlign='left'; ctx.textBaseline='middle';
+  ctx.fillText(text,ix+iconSz+gap,cy);
+  ctx.restore();
+}
+
+function rr(x,y,w,h,r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+  ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y); ctx.closePath();
+}
+
+// ─── Layout constants (relative coords) ───────────────────────────────────────
+// Left: Git panel   Right: Managed ArgoCD   Bottom center: CP pool
+const GIT  = { x1:0.04, y1:0.10, x2:0.37, y2:0.82 };
+const ARGO = { x1:0.41, y1:0.10, x2:0.97, y2:0.66 };
+
+// AppSet node positions (relative to canvas)
+const NODES = {
+  appset_cp:    { rx:0.620, ry:0.250 },
+  appset_cpart: { rx:0.620, ry:0.390 },
+  appset_apart: { rx:0.620, ry:0.530 },
+  cp1: { rx:0.490, ry:0.840 },
+  cp2: { rx:0.660, ry:0.840 },
+  cp3: { rx:0.830, ry:0.840 },
+};
+
+// ─── Animated scalars ─────────────────────────────────────────────────────────
+const A = {
+  gitFiles:   0,
+  cp3File:    0,
+  gitPush:    0,
+  detected:   0,
+  appCreated: 0,
+  helmDeploy: 0,
+  cp3Online:  0,
+};
+
+function tickAnim() {
+  const sp = 0.038;
+  A.gitFiles   += ((step >= 0 ? 1 : 0) - A.gitFiles)   * sp;
+  A.cp3File    += ((step >= 1 ? 1 : 0) - A.cp3File)    * sp * 1.3;
+  A.gitPush    += ((step === 1 ? 1 : 0) - A.gitPush)   * sp * 1.6;
+  A.detected   += ((step >= 2 ? 1 : 0) - A.detected)   * sp * 1.2;
+  A.appCreated += ((step >= 3 ? 1 : 0) - A.appCreated) * sp;
+  A.helmDeploy += ((step === 4 ? 1 : 0) - A.helmDeploy)* sp * 1.3;
+  A.cp3Online  += ((step >= 4 ? 1 : 0) - A.cp3Online)  * sp * 0.9;
+}
+
+let sceneOp = 0;
+function updateNop() {
+  sceneOp += ((step >= 6 ? 0.08 : 1) - sceneOp) * 0.028;
+}
+
+// ─── Particles ────────────────────────────────────────────────────────────────
+const CONNS = [
+  // Steady: Git → each AppSet (represents ArgoCD watching Git)
+  { toGit:'appset_cp',    minS:0, maxS:5, col:'#60A5FA', rate:0.014 },
+  { toGit:'appset_cpart', minS:0, maxS:5, col:'#A78BFA', rate:0.014 },
+  { toGit:'appset_apart', minS:0, maxS:5, col:'#34D399', rate:0.014 },
+  // Step 2-3: CP AppSet detects + creates cp-3 app
+  { from:'appset_cp', to:'cp3', minS:2, maxS:3, col:'#F59E0B', rate:0.026 },
+  // Step 4: Helm deploy
+  { from:'appset_cp', to:'cp3', minS:4, maxS:4, col:'#2DD4BF', rate:0.022 },
+  // Step 5: Steady management of all 3 CPs
+  { from:'appset_cp', to:'cp1', minS:5, maxS:5, col:'#60A5FA', rate:0.010 },
+  { from:'appset_cp', to:'cp2', minS:5, maxS:5, col:'#60A5FA', rate:0.010 },
+  { from:'appset_cp', to:'cp3', minS:5, maxS:5, col:'#60A5FA', rate:0.010 },
+];
+
+let particles = [];
+
+class Particle {
+  constructor(c) {
+    this.col = c.col;
+    this.p   = 0;
+    this.spd = 0.006 + Math.random() * 0.005;
+    this.r   = 1.6 + Math.random() * 0.9;
+    this.alive = true;
+
+    if (c.toGit) {
+      // From Git right edge → AppSet node
+      const n = NODES[c.toGit];
+      this.sx = GIT.x2;
+      this.sy = n.ry;
+      this.ex = n.rx;
+      this.ey = n.ry;
+      this.mode = 'git';
+    } else {
+      this.from = c.from;
+      this.to   = c.to;
+      this.mode = 'node';
+    }
+    this.bxOff = (Math.random() - 0.5) * 0.05;
+    this.byOff = (Math.random() - 0.5) * 0.03;
+  }
+
+  pos() {
+    let fx, fy, tx, ty;
+    if (this.mode === 'git') {
+      fx = this.sx * W; fy = this.sy * H;
+      tx = this.ex * W; ty = this.ey * H;
+    } else {
+      const f = NODES[this.from], t = NODES[this.to];
+      fx = f.rx * W; fy = f.ry * H;
+      tx = t.rx * W; ty = t.ry * H;
+    }
+    const S = Math.min(W, H);
+    const cx = (fx+tx)/2 + this.bxOff * S;
+    const cy = (fy+ty)/2 + this.byOff * S;
+    const u = 1 - this.p;
+    return {
+      x: u*u*fx + 2*u*this.p*cx + this.p*this.p*tx,
+      y: u*u*fy + 2*u*this.p*cy + this.p*this.p*ty,
+    };
+  }
+
+  update() { this.p += this.spd; if (this.p >= 1) this.alive = false; }
+
+  draw() {
+    const {x,y} = this.pos();
+    const a = Math.sin(this.p * Math.PI);
+    ctx.save();
+    ctx.globalAlpha = a * 0.28; ctx.fillStyle = this.col;
+    ctx.shadowColor = this.col; ctx.shadowBlur = 14;
+    ctx.beginPath(); ctx.arc(x,y,this.r*2.5,0,Math.PI*2); ctx.fill();
+    ctx.globalAlpha = a * 0.92; ctx.shadowBlur = 5;
+    ctx.beginPath(); ctx.arc(x,y,this.r,0,Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+function maybeSpawn() {
+  if (step >= 6) return;
+  CONNS.forEach(c => {
+    if (step < c.minS || step > c.maxS) return;
+    if (Math.random() < c.rate) particles.push(new Particle(c));
+  });
+}
+
+// ─── Git files data ───────────────────────────────────────────────────────────
+const GIT_FILES = [
+  { label:'managed/applicationsets/', dir:true  },
+  { label:'├── control-planes.yaml',          dir:false, col:'#60A5FA' },
+  { label:'├── cluster-partitions.yaml',      dir:false, col:'#A78BFA' },
+  { label:'└── application-partitions.yaml',  dir:false, col:'#34D399' },
+  { label:'', dir:true },
+  { label:'control-planes/values/', dir:true  },
+  { label:'├── default.yaml',                 dir:false, col:'#94A3B8' },
+  { label:'└── cp-3/default.yaml',            dir:false, col:'#FBBF24', isNew:true },
+];
+
+// ─── Draw functions ───────────────────────────────────────────────────────────
+
+function drawBg() { ctx.fillStyle='#080B12'; ctx.fillRect(0,0,W,H); }
+
+function drawGitPanel() {
+  const op = sceneOp * A.gitFiles; if (op < 0.01) return;
+  const bx=GIT.x1*W, by=GIT.y1*H, bw=(GIT.x2-GIT.x1)*W, bh=(GIT.y2-GIT.y1)*H;
+  const hdr = 36;
+
+  ctx.save(); ctx.globalAlpha = op;
+  // Panel bg
+  ctx.fillStyle = 'rgba(5,10,20,0.98)'; rr(bx,by,bw,bh,12); ctx.fill();
+  ctx.strokeStyle = 'rgba(248,113,113,0.32)'; ctx.lineWidth = 1.5;
+  rr(bx,by,bw,bh,12); ctx.stroke();
+  // Header bar
+  ctx.fillStyle = 'rgba(239,68,68,0.10)';
+  ctx.beginPath();
+  ctx.moveTo(bx+12,by); ctx.lineTo(bx+bw-12,by);
+  ctx.quadraticCurveTo(bx+bw,by,bx+bw,by+12); ctx.lineTo(bx+bw,by+hdr);
+  ctx.lineTo(bx,by+hdr); ctx.lineTo(bx,by+12);
+  ctx.quadraticCurveTo(bx,by,bx+12,by); ctx.closePath(); ctx.fill();
+  // Dots
+  ['#FF5F57','#FEBC2E','#28C840'].forEach((c,i)=>{
+    ctx.fillStyle=c; ctx.beginPath(); ctx.arc(bx+14+i*16, by+hdr/2, 4, 0, Math.PI*2); ctx.fill();
+  });
+  ctx.fillStyle='rgba(248,113,113,0.80)'; ctx.font='600 11px Inter,sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('GitHub — argocd-platform', bx+bw/2+10, by+hdr/2);
+
+  // File tree
+  const lineH=27, startY=by+hdr+16;
+  GIT_FILES.forEach((f,i)=>{
+    const fy = startY + i*lineH;
+    const newOp = f.isNew ? A.cp3File : 1;
+    if (f.isNew && newOp < 0.01) return;
+    ctx.globalAlpha = op * (f.isNew ? newOp : 1);
+
+    if (f.dir) {
+      if (!f.label) return; // blank spacer
+      ctx.fillStyle='rgba(148,163,184,0.55)'; ctx.font='500 10px "Courier New",monospace';
+      ctx.textAlign='left'; ctx.textBaseline='middle';
+      ctx.fillText('📁  ' + f.label, bx+14, fy+13);
+    } else if (f.isNew) {
+      // highlight row
+      ctx.fillStyle=`rgba(251,191,36,${newOp*0.12})`;
+      rr(bx+10,fy+2,bw-20,22,3); ctx.fill();
+      ctx.strokeStyle=`rgba(251,191,36,${newOp*0.50})`; ctx.lineWidth=0.8;
+      rr(bx+10,fy+2,bw-20,22,3); ctx.stroke();
+      ctx.fillStyle=`rgba(251,191,36,${0.65+newOp*0.30})`;
+      ctx.font='600 10px "Courier New",monospace';
+      ctx.textAlign='left'; ctx.textBaseline='middle';
+      ctx.fillText('📄  ' + f.label, bx+14, fy+13);
+      // NEW badge
+      ctx.fillStyle='rgba(251,191,36,0.18)'; rr(bx+bw-56,fy+5,46,14,3); ctx.fill();
+      ctx.fillStyle='#FBBF24'; ctx.font='700 8px Inter,sans-serif';
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      ctx.fillText('NEW', bx+bw-33, fy+12);
+    } else {
+      ctx.fillStyle = f.col || 'rgba(148,163,184,0.65)';
+      ctx.font='500 10px "Courier New",monospace';
+      ctx.textAlign='left'; ctx.textBaseline='middle';
+      ctx.fillText('📄  ' + f.label, bx+14, fy+13);
+    }
+  });
+
+  // git push terminal block (step 1)
+  if (A.gitPush > 0.05) {
+    const pushY = by+bh-46;
+    ctx.globalAlpha = op * A.gitPush;
+    ctx.fillStyle='rgba(20,40,20,0.90)'; rr(bx+10,pushY,bw-20,32,5); ctx.fill();
+    ctx.strokeStyle='rgba(74,222,128,0.45)'; ctx.lineWidth=1;
+    rr(bx+10,pushY,bw-20,32,5); ctx.stroke();
+    ctx.fillStyle='rgba(74,222,128,0.45)'; ctx.font='600 9px "Courier New",monospace';
+    ctx.textAlign='left'; ctx.textBaseline='middle';
+    ctx.fillText('$ git add control-planes/values/cp-3/', bx+18, pushY+10);
+    ctx.fillStyle='#4ADE80'; ctx.font='700 9px "Courier New",monospace';
+    ctx.fillText('$ git push origin main', bx+18, pushY+24);
+  }
+  ctx.restore();
+}
+
+function drawArgoBox() {
+  const op = sceneOp; if (op < 0.01) return;
+  const bx=ARGO.x1*W, by=ARGO.y1*H, bw=(ARGO.x2-ARGO.x1)*W, bh=(ARGO.y2-ARGO.y1)*H;
+  const hdr = 36;
+  ctx.save();
+  ctx.globalAlpha = op * 0.03; ctx.fillStyle='#3B82F6'; rr(bx,by,bw,bh,14); ctx.fill();
+  ctx.globalAlpha = op * 0.10; ctx.fillStyle='#1D4ED8';
+  ctx.beginPath(); ctx.moveTo(bx+14,by); ctx.lineTo(bx+bw-14,by);
+  ctx.quadraticCurveTo(bx+bw,by,bx+bw,by+14); ctx.lineTo(bx+bw,by+hdr);
+  ctx.lineTo(bx,by+hdr); ctx.lineTo(bx,by+14);
+  ctx.quadraticCurveTo(bx,by,bx+14,by); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha = op * 0.20; ctx.strokeStyle='rgba(96,165,250,0.45)';
+  ctx.lineWidth=1.5; ctx.setLineDash([8,14]);
+  rr(bx,by,bw,bh,14); ctx.stroke(); ctx.setLineDash([]);
+  ctx.restore();
+  drawArgoLabel(bx+bw/2, by+hdr/2, 'Managed ArgoCD', '700 13px Inter,sans-serif', '#93C5FD', op*0.75, 14);
+}
+
+const APPSET_DEFS = [
+  { key:'appset_cp',    label:'control-planes ApplicationSet',           col:'#60A5FA', sub:'Cluster Generator  ·  argocd-platform/control-plane: true' },
+  { key:'appset_cpart', label:'cluster-partitions ApplicationSet',       col:'#A78BFA', sub:'Plugin Generator  ·  /cluster-partitions' },
+  { key:'appset_apart', label:'application-partitions ApplicationSet',   col:'#34D399', sub:'Plugin Generator  ·  /application-partitions' },
+];
+
+function drawAppSetNode(def) {
+  const n = NODES[def.key], op = sceneOp; if (op < 0.01) return;
+  const cx=n.rx*W, cy=n.ry*H;
+  const w=340, h=56, px=cx-w/2, py=cy-h/2;
+  const isCP = def.key === 'appset_cp';
+  const glow = isCP && A.detected > 0.08 ? A.detected : 0;
+
+  ctx.save(); ctx.globalAlpha = op;
+  ctx.shadowColor = `${def.col}50`; ctx.shadowBlur = 10 + glow*24 + Math.sin(pulse*0.65)*3;
+  ctx.fillStyle='rgba(4,10,24,0.98)'; rr(px,py,w,h,8); ctx.fill();
+  ctx.shadowBlur=0; ctx.strokeStyle=def.col;
+  ctx.globalAlpha = op*(0.48 + (isCP ? glow*0.42 : 0)); ctx.lineWidth=1.5;
+  rr(px,py,w,h,8); ctx.stroke();
+  ctx.globalAlpha=op;
+  ctx.fillStyle='rgba(148,163,184,0.52)'; ctx.font='500 9px Inter,sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(def.sub, cx, cy+11);
+  if (isCP && A.detected > 0.08) {
+    ctx.globalAlpha=op*A.detected;
+    ctx.fillStyle='#FBBF24'; ctx.font='700 8px Inter,sans-serif';
+    ctx.textAlign='right'; ctx.textBaseline='middle';
+    ctx.fillText('New cluster found →', px+w-10, cy+11);
+  }
+  ctx.restore();
+  drawArgoLabel(cx, cy-9, def.label, '600 11.5px Inter,sans-serif', def.col, op, 12);
+}
+
+function drawAppCp3() {
+  const op = sceneOp * A.appCreated; if (op < 0.04) return;
+  const n = NODES.appset_cp, cx=n.rx*W, cy=n.ry*H+66;
+  const w=230, h=34;
+  ctx.save(); ctx.globalAlpha=op;
+  ctx.shadowColor='rgba(45,212,191,0.45)'; ctx.shadowBlur=10+Math.sin(pulse*.7)*4;
+  ctx.fillStyle='rgba(4,18,16,0.98)'; rr(cx-w/2,cy-h/2,w,h,7); ctx.fill();
+  ctx.shadowBlur=0; ctx.strokeStyle='rgba(45,212,191,0.70)'; ctx.lineWidth=1.5;
+  rr(cx-w/2,cy-h/2,w,h,7); ctx.stroke();
+  ctx.fillStyle='#2DD4BF'; ctx.font='600 10.5px Inter,sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText('Application: control-plane-cp-3', cx, cy);
+  ctx.restore();
+}
+
+function drawCP(key) {
+  const n = NODES[key], op = sceneOp; if (op < 0.01) return;
+  const cx=n.rx*W, cy=n.ry*H;
+  const isCP3 = key === 'cp3';
+  const cpOp = isCP3 ? A.cp3Online : 1;
+  if (cpOp < 0.01) return;
+  const w=120, h=52;
+  const deploying = isCP3 && A.helmDeploy > 0.08 && A.cp3Online < 0.75;
+  const col = isCP3 ? '#34D399' : '#7DD3FC';
+
+  ctx.save(); ctx.globalAlpha = op * cpOp;
+  ctx.shadowColor = deploying ? 'rgba(251,191,36,0.55)' : `${col}45`;
+  ctx.shadowBlur = 10 + (deploying ? A.helmDeploy*22 : 0) + Math.sin(pulse*.6)*3;
+  ctx.fillStyle='rgba(4,10,24,0.98)'; rr(cx-w/2,cy-h/2,w,h,9); ctx.fill();
+  ctx.shadowBlur=0;
+  ctx.strokeStyle = deploying ? `rgba(251,191,36,${0.50+A.helmDeploy*0.40})` : col;
+  ctx.globalAlpha = op * cpOp * 0.65; ctx.lineWidth=1.5;
+  rr(cx-w/2,cy-h/2,w,h,9); ctx.stroke();
+  ctx.globalAlpha = op * cpOp;
+  ctx.fillStyle = deploying ? '#FBBF24' : col;
+  ctx.font='700 11.5px Inter,sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  const label = key==='cp1'?'CP-1':key==='cp2'?'CP-2':'CP-3';
+  ctx.fillText(label, cx, cy-8);
+  ctx.fillStyle='rgba(148,163,184,0.55)'; ctx.font='500 9px Inter,sans-serif';
+  ctx.fillText(deploying?'installing…':(isCP3?'online ✓':'online'), cx, cy+7);
+  ctx.restore();
+}
+
+function drawConnLines() {
+  // Dashed lines from Git right edge to each AppSet (light guides)
+  if (sceneOp < 0.01) return;
+  APPSET_DEFS.forEach(def => {
+    const n = NODES[def.key];
+    const gx = GIT.x2*W, gy = n.ry*H;
+    const tx = n.rx*W;
+    ctx.save(); ctx.globalAlpha = sceneOp * 0.10;
+    ctx.strokeStyle = `${def.col}55`; ctx.lineWidth=1; ctx.setLineDash([4,10]);
+    ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(tx, gy); ctx.stroke();
+    ctx.setLineDash([]); ctx.restore();
+  });
+}
+
+// ─── Step / UI ────────────────────────────────────────────────────────────────
+let step = 0;
+const MAX_STEPS = 7;
+let t = 0, pulse = 0;
+
+const LABELS = [
+  'ApplicationSet definitions stored in Git — the single source of truth',
+  'Admin adds cp-3/default.yaml to Git and pushes — no manual cluster steps',
+  'control-planes ApplicationSet detects the new cluster via label selector',
+  'Application "control-plane-cp-3" is created by the ApplicationSet',
+  'Helm chart installs ArgoCD on CP-3 and registers it to the pool',
+  'Three control planes managed from Git — ready to accept clusters',
+  '',
+];
+
+const stepLabelEl  = document.getElementById('step-label');
+const narrativeEl  = document.getElementById('narrative');
+const narTitle     = document.getElementById('nar-title');
+const narSub       = document.getElementById('nar-sub');
+const progressEl   = document.getElementById('progress');
+const hintEl       = document.getElementById('hint');
+
+for (let i=0;i<MAX_STEPS;i++){
+  const d=document.createElement('div'); d.className='dot'; d.id='dot'+i;
+  progressEl.appendChild(d);
+}
+
+function updateUI(){
+  stepLabelEl.textContent = step < 6 ? LABELS[step] : '';
+  if (step === 6) {
+    narTitle.textContent = 'One Git push. A new control plane joins the pool.';
+    narSub.textContent   = 'ApplicationSet definitions, Helm values, cluster config — all in Git. No manual provisioning.';
+    narrativeEl.classList.add('visible');
+  } else {
+    narrativeEl.classList.remove('visible');
+  }
+  for (let i=0;i<MAX_STEPS;i++)
+    document.getElementById('dot'+i).className='dot'+(i===step?' active':'');
+}
+
+let hintTimer;
+function advance(){
+  if (step >= MAX_STEPS-1){ window.parent.postMessage({type:'scene-complete'},'*'); return; }
+  step++;
+  if (step === 6) particles = [];
+  updateUI();
+  hintEl.classList.remove('hidden');
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(()=>hintEl.classList.add('hidden'), 3000);
+}
+
+document.addEventListener('click', advance);
+document.addEventListener('keydown', e=>{
+  if (e.code==='Space'||e.code==='ArrowRight'){ e.preventDefault(); advance(); return; }
+  if (e.code==='ArrowLeft'&&step===0){ window.parent.postMessage({type:'scene-back'},'*'); return; }
+  if (e.code==='ArrowLeft'&&step>0){ step--; particles=[]; updateUI(); }
+});
+
+// ─── Main loop ────────────────────────────────────────────────────────────────
+function loop(){
+  requestAnimationFrame(loop);
+  t++; pulse += 0.040;
+  tickAnim(); updateNop();
+  if (step < 6) maybeSpawn();
+  particles = particles.filter(p=>{ p.update(); return p.alive; });
+  drawBg();
+  drawConnLines();
+  particles.forEach(p=>p.draw());
+  drawGitPanel();
+  drawArgoBox();
+  APPSET_DEFS.forEach(drawAppSetNode);
+  drawAppCp3();
+  drawCP('cp1'); drawCP('cp2'); drawCP('cp3');
+}
+
+updateUI();
+setTimeout(()=>hintEl.classList.add('hidden'), 4000);
+loop();
+
+// ── ArrowUp = prev scene, ArrowDown = next scene ─────────────────────────────
+document.addEventListener('keydown', function(e) {
+  if (e.code === 'ArrowUp')   { e.preventDefault(); window.parent.postMessage({type:'scene-back'},'*'); }
+  if (e.code === 'ArrowDown') { e.preventDefault(); window.parent.postMessage({type:'scene-complete'},'*'); }
+}, true);
+</script>
+</body>
+</html>

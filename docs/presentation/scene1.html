@@ -3,713 +3,209 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Scene 1 — When ArgoCD Becomes the Bottleneck</title>
+  <title>Scalable Managed ArgoCD</title>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-
-    body {
-      background: #080B12;
-      overflow: hidden;
-      width: 100vw;
-      height: 100vh;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-      cursor: pointer;
-      user-select: none;
-    }
-
-    canvas {
-      display: block;
-      position: absolute;
-      top: 0; left: 0;
-      pointer-events: none;
-    }
-
-    /* ── Narrative overlay ── */
-    #narrative {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      pointer-events: none;
-      opacity: 0;
-      transition: opacity 1.2s ease;
-    }
-    #narrative.visible { opacity: 1; }
-
-    #nar-title {
-      color: #ffffff;
-      font-size: clamp(22px, 3.2vw, 52px);
-      font-weight: 700;
-      letter-spacing: -0.025em;
-      text-align: center;
-      line-height: 1.15;
-      max-width: 800px;
-      padding: 0 40px;
-      text-shadow: 0 0 60px rgba(239, 100, 80, 0.4);
-    }
-    #nar-sub {
-      margin-top: 14px;
-      color: rgba(255, 255, 255, 0.42);
-      font-size: clamp(13px, 1.6vw, 20px);
-      font-weight: 400;
-      text-align: center;
-      padding: 0 40px;
-      letter-spacing: 0.01em;
-    }
-
-    /* ── Scene label ── */
-    #scene-label {
-      position: absolute;
-      top: 28px;
-      left: 36px;
-      color: rgba(255,255,255,0.18);
-      font-size: 11px;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      font-weight: 500;
-      pointer-events: none;
-    }
-
-    /* ── Progress dots ── */
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { background:#080B12; overflow:hidden; width:100vw; height:100vh; font-family:'Inter',-apple-system,sans-serif; cursor:pointer; user-select:none; }
+    canvas { display:block; position:absolute; top:0; left:0; pointer-events:none; }
     #progress {
-      position: absolute;
-      bottom: 30px;
-      left: 50%;
-      transform: translateX(-50%);
-      display: flex;
-      gap: 7px;
-      align-items: center;
-      pointer-events: none;
+      position:absolute; bottom:30px; left:50%; transform:translateX(-50%);
+      display:flex; gap:7px; align-items:center; pointer-events:none;
     }
-    .dot {
-      width: 5px; height: 5px;
-      border-radius: 50%;
-      background: rgba(255,255,255,0.15);
-      transition: all 0.4s ease;
-    }
-    .dot.active {
-      background: rgba(255,255,255,0.75);
-      width: 18px;
-      border-radius: 3px;
-    }
-
-    /* ── Click hint ── */
+    .dot { width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,0.15); transition:all 0.4s ease; }
+    .dot.active { background:rgba(255,255,255,0.75); width:18px; border-radius:3px; }
     #hint {
-      position: absolute;
-      bottom: 52px;
-      left: 50%;
-      transform: translateX(-50%);
-      color: rgba(255,255,255,0.18);
-      font-size: 11px;
-      letter-spacing: 0.10em;
-      text-transform: uppercase;
-      pointer-events: none;
-      white-space: nowrap;
-      transition: opacity 0.5s;
+      position:absolute; bottom:52px; left:50%; transform:translateX(-50%);
+      color:rgba(255,255,255,0.18); font-size:11px; letter-spacing:0.10em;
+      text-transform:uppercase; pointer-events:none; white-space:nowrap; transition:opacity 0.5s;
     }
-    #hint.hidden { opacity: 0; }
+    #hint.hidden { opacity:0; }
   </style>
 </head>
 <body>
-
 <canvas id="c"></canvas>
-
-<div id="narrative">
-  <h1 id="nar-title"></h1>
-  <p id="nar-sub"></p>
-</div>
-
-<div id="scene-label">Scene 1 &nbsp;/&nbsp; The Scaling Problem</div>
-
-<div id="legend" style="
-  position:absolute; bottom:68px; right:32px;
-  display:flex; flex-direction:column; gap:7px;
-  opacity:0; transition:opacity 0.8s ease;
-  pointer-events:none;
-">
-  <div style="display:flex;align-items:center;gap:8px;">
-    <span style="width:28px;height:3px;border-radius:2px;background:#F59E0B;box-shadow:0 0 6px #F59E0B;display:block;"></span>
-    <span style="font-size:11px;color:rgba(255,255,255,0.45);font-family:Inter,sans-serif;letter-spacing:0.04em;">App → ArgoCD (sync request)</span>
-  </div>
-  <div style="display:flex;align-items:center;gap:8px;">
-    <span style="width:28px;height:3px;border-radius:2px;background:#4ADE80;box-shadow:0 0 6px #4ADE80;display:block;"></span>
-    <span style="font-size:11px;color:rgba(255,255,255,0.45);font-family:Inter,sans-serif;letter-spacing:0.04em;">ArgoCD → Cluster (reconcile)</span>
-  </div>
-  <div style="display:flex;align-items:center;gap:8px;">
-    <span style="width:28px;height:3px;border-radius:2px;background:#60A5FA;box-shadow:0 0 6px #60A5FA;display:block;"></span>
-    <span style="font-size:11px;color:rgba(255,255,255,0.45);font-family:Inter,sans-serif;letter-spacing:0.04em;">Cluster → ArgoCD (status)</span>
-  </div>
-</div>
-
 <div id="hint">Click or press Space to continue</div>
-
 <div id="progress"></div>
 
 <script>
 'use strict';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Canvas & DPR
-// ─────────────────────────────────────────────────────────────────────────────
 const canvas = document.getElementById('c');
 const ctx    = canvas.getContext('2d');
 let W = 0, H = 0;
-
 function resize() {
   const dpr = window.devicePixelRatio || 1;
-  W = window.innerWidth;
-  H = window.innerHeight;
-  canvas.width  = W * dpr;
-  canvas.height = H * dpr;
-  canvas.style.width  = W + 'px';
-  canvas.style.height = H + 'px';
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width  = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
   ctx.scale(dpr, dpr);
 }
-resize();
-window.addEventListener('resize', resize);
+resize(); window.addEventListener('resize', resize);
 
-// ─── ArgoCD icon — pre-rasterised once, blitted per frame ─────────────────────
-const _argoImg = new Image();
-let   _argoOC  = null;
+// ── ArgoCD icon ───────────────────────────────────────────────────────────────
+const _argoImg = new Image(); let _argoOC = null;
 _argoImg.onload = () => {
-  const oc = document.createElement('canvas');
-  oc.width = 64; oc.height = 64;
-  oc.getContext('2d').drawImage(_argoImg, 0, 0, 64, 64);
-  _argoOC = oc;
+  const oc = document.createElement('canvas'); oc.width = 128; oc.height = 128;
+  oc.getContext('2d').drawImage(_argoImg, 0, 0, 128, 128); _argoOC = oc;
 };
 _argoImg.src = 'argocd-icon.svg';
 
-// Draw [icon  text] as a centred unit at (cx, cy)
-function drawArgoLabel(cx, cy, text, font, color, op, iconSz) {
-  if (iconSz === undefined) iconSz = 15;
-  ctx.save();
-  ctx.font = font;
-  const tw     = ctx.measureText(text).width;
-  const gap    = 5;
-  const totalW = iconSz + gap + tw;
-  const ix     = cx - totalW / 2;
-  ctx.globalAlpha  = op;
-  ctx.shadowBlur   = 0;
-  if (_argoOC) ctx.drawImage(_argoOC, ix, cy - iconSz / 2, iconSz, iconSz);
-  ctx.fillStyle    = color;
-  ctx.textAlign    = 'left';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, ix + iconSz + gap, cy);
-  ctx.restore();
+// ── Ambient star field ────────────────────────────────────────────────────────
+const STARS = Array.from({ length: 120 }, () => ({
+  x:  Math.random(),
+  y:  Math.random(),
+  r:  0.5 + Math.random() * 1.1,
+  vx: (Math.random() - 0.5) * 0.00005,
+  vy: (Math.random() - 0.5) * 0.00005,
+  op: 0.04 + Math.random() * 0.14,
+  col: Math.random() < 0.55 ? '#60A5FA' : '#A78BFA',
+}));
+
+// ── Animation scalars ─────────────────────────────────────────────────────────
+const A = { icon: 0, title: 0, tagline: 0 };
+let step = 0, MAX_STEPS = 3, pulse = 0;
+
+function tickAnim() {
+  const sp = 0.030;
+  A.icon    += ((step >= 0 ? 1 : 0) - A.icon)    * sp * 1.3;
+  A.title   += ((step >= 1 ? 1 : 0) - A.title)   * sp;
+  A.tagline += ((step >= 2 ? 1 : 0) - A.tagline) * sp;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Node Definitions
-// rx/ry = relative position [0..1] on canvas
-// step  = first step at which this node becomes visible
-// ─────────────────────────────────────────────────────────────────────────────
-const NODES = {
-  argocd:    { rx:0.50, ry:0.47, type:'argocd',  step:0 },
+// ── Ring pulse ────────────────────────────────────────────────────────────────
+const RING_PHASES = [0, 0.33, 0.67];
 
-  // Initial clusters (step 0) — bottom row
-  c1:        { rx:0.28, ry:0.78, type:'cluster', step:0 },
-  c2:        { rx:0.50, ry:0.80, type:'cluster', step:0 },
-  c3:        { rx:0.72, ry:0.78, type:'cluster', step:0 },
-
-  // App wave 1 (step 1) — top row, spread
-  a1:        { rx:0.22, ry:0.15, type:'app',     step:1 },
-  a2:        { rx:0.50, ry:0.12, type:'app',     step:1 },
-  a3:        { rx:0.78, ry:0.15, type:'app',     step:1 },
-
-  // App wave 2 (step 2) — fill in gaps top row
-  a4:        { rx:0.08, ry:0.20, type:'app',     step:2 },
-  a5:        { rx:0.36, ry:0.11, type:'app',     step:2 },
-  a6:        { rx:0.64, ry:0.11, type:'app',     step:2 },
-  a7:        { rx:0.92, ry:0.20, type:'app',     step:2 },
-
-  // Cluster wave 2 (step 3) — expand bottom row
-  c4:        { rx:0.10, ry:0.79, type:'cluster', step:3 },
-  c5:        { rx:0.90, ry:0.79, type:'cluster', step:3 },
-  c6:        { rx:0.38, ry:0.87, type:'cluster', step:3 },
-  c7:        { rx:0.62, ry:0.87, type:'cluster', step:3 },
-};
-
-// Live opacity per node (animated toward target)
-const opacity = {};
-Object.keys(NODES).forEach(k => opacity[k] = 0);
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Connections  [from, to]
-// ─────────────────────────────────────────────────────────────────────────────
-const CONNS = [
-  // ArgoCD reconciles clusters (step 0)
-  { from:'argocd', to:'c1', step:0 },
-  { from:'argocd', to:'c2', step:0 },
-  { from:'argocd', to:'c3', step:0 },
-  // Clusters report back
-  { from:'c1', to:'argocd', step:0 },
-  { from:'c2', to:'argocd', step:0 },
-  { from:'c3', to:'argocd', step:0 },
-  // App wave 1 sync requests
-  { from:'a1', to:'argocd', step:1 },
-  { from:'a2', to:'argocd', step:1 },
-  { from:'a3', to:'argocd', step:1 },
-  // App wave 2
-  { from:'a4', to:'argocd', step:2 },
-  { from:'a5', to:'argocd', step:2 },
-  { from:'a6', to:'argocd', step:2 },
-  { from:'a7', to:'argocd', step:2 },
-  // Cluster wave 2
-  { from:'argocd', to:'c4', step:3 },
-  { from:'argocd', to:'c5', step:3 },
-  { from:'argocd', to:'c6', step:3 },
-  { from:'argocd', to:'c7', step:3 },
-  { from:'c4', to:'argocd', step:3 },
-  { from:'c5', to:'argocd', step:3 },
-  { from:'c6', to:'argocd', step:3 },
-  { from:'c7', to:'argocd', step:3 },
-];
-
-// ─────────────────────────────────────────────────────────────────────────────
-// State
-// ─────────────────────────────────────────────────────────────────────────────
-let step        = 0;
-const MAX_STEPS = 7;  // steps 0 – 6
-let pressure    = 0;  // 0–1, drives ArgoCD glow intensity
-let pulsePhase  = 0;
-let frozen      = false;
-let particles   = [];
-let t           = 0;  // global frame counter
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Particle
-// ─────────────────────────────────────────────────────────────────────────────
-class Particle {
-  constructor(from, to, col) {
-    this.from = from;
-    this.to   = to;
-    this.col  = col;
-    this.p    = 0;                                // progress 0→1
-    this.spd  = 0.006 + Math.random() * 0.004;
-    this.r    = 2.2 + Math.random() * 1.6;       // radius
-    // Slight random bezier bow
-    this.bow  = { x:(Math.random()-0.5)*0.12, y:(Math.random()-0.5)*0.08 };
-    this.alive = true;
-  }
-
-  pos() {
-    const f = NODES[this.from], t = NODES[this.to];
-    const fx=f.rx*W, fy=f.ry*H, tx=t.rx*W, ty=t.ry*H;
-    const cx = (fx+tx)/2 + this.bow.x * Math.min(W,H);
-    const cy = (fy+ty)/2 + this.bow.y * Math.min(W,H);
-    const u  = 1 - this.p;
-    return { x: u*u*fx + 2*u*this.p*cx + this.p*this.p*tx,
-             y: u*u*fy + 2*u*this.p*cy + this.p*this.p*ty };
-  }
-
-  update() {
-    this.p += this.spd;
-    if (this.p >= 1) this.alive = false;
-  }
-
-  draw() {
-    if (!this.alive) return;
-    const { x, y } = this.pos();
-    const alpha = Math.sin(this.p * Math.PI); // fade in/out
+function drawRings(cx, cy, op) {
+  RING_PHASES.forEach(ph => {
+    const t = ((pulse * 0.32 + ph) % 1);
+    const r = 52 + t * 92;
+    const a = (1 - t) * 0.28 * op;
     ctx.save();
-    // Glow halo
-    ctx.globalAlpha = alpha * 0.35;
-    ctx.fillStyle = this.col;
-    ctx.shadowColor = this.col;
-    ctx.shadowBlur = 14;
-    ctx.beginPath();
-    ctx.arc(x, y, this.r * 2.5, 0, Math.PI*2);
-    ctx.fill();
-    // Core
-    ctx.globalAlpha = alpha * 0.92;
-    ctx.shadowBlur = 4;
-    ctx.beginPath();
-    ctx.arc(x, y, this.r, 0, Math.PI*2);
-    ctx.fill();
+    ctx.globalAlpha = a;
+    ctx.strokeStyle = '#3B82F6';
+    ctx.lineWidth   = 1.4;
+    ctx.shadowColor = '#3B82F6'; ctx.shadowBlur = 14;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
     ctx.restore();
-  }
+  });
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-function rr(ctx, x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x+r, y);
-  ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r);
-  ctx.lineTo(x+w, y+h-r); ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
-  ctx.lineTo(x+r, y+h); ctx.quadraticCurveTo(x, y+h, x, y+h-r);
-  ctx.lineTo(x, y+r); ctx.quadraticCurveTo(x, y, x+r, y);
-  ctx.closePath();
-}
-
-function lerp(a, b, t) { return a + (b - a) * t; }
-function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-
-// Particle spawn probability per frame per active connection
-function spawnProb() {
-  const probs = [0.002, 0.006, 0.013, 0.024, 0.055, 0, 0];
-  return probs[clamp(step, 0, 6)];
-}
-
-function particleColor(from, to) {
-  if (step >= 4) return '#FB923C'; // all flows turn orange under pressure
-
-  const fromType = NODES[from].type;
-  const toType   = NODES[to].type;
-
-  // Application → ArgoCD: amber/warm
-  if (fromType === 'app' && to === 'argocd') return '#F59E0B';
-
-  // Cluster → ArgoCD (status reports): cool blue
-  if (fromType === 'cluster' && to === 'argocd') return '#60A5FA';
-
-  // ArgoCD → Cluster (reconcile): green
-  if (from === 'argocd' && toType === 'cluster') return '#4ADE80';
-
-  return '#F59E0B';
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Draw background
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Draw ──────────────────────────────────────────────────────────────────────
 function drawBg() {
-  ctx.fillStyle = '#080B12';
-  ctx.fillRect(0, 0, W, H);
-
-  // Atmospheric glow around ArgoCD area
-  const n = NODES.argocd;
-  const gx = n.rx * W, gy = n.ry * H;
-  const gr = Math.min(W, H) * 0.55;
-  const bg = ctx.createRadialGradient(gx, gy, 0, gx, gy, gr);
-  if (step >= 4) {
-    bg.addColorStop(0,   `rgba(100, 25, 10, ${0.12 + pressure*0.12})`);
-    bg.addColorStop(0.5, `rgba(50, 10, 5, ${0.06 + pressure*0.06})`);
-  } else {
-    bg.addColorStop(0,   'rgba(5, 25, 55, 0.16)');
-    bg.addColorStop(0.5, 'rgba(3, 15, 35, 0.08)');
-  }
-  bg.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Draw static connection lines
-// ─────────────────────────────────────────────────────────────────────────────
-const drawnLines = new Set();
-
-function drawLines() {
-  drawnLines.clear();
-  CONNS.forEach(c => {
-    const key = [c.from, c.to].sort().join('|');
-    if (drawnLines.has(key)) return;
-    drawnLines.add(key);
-
-    const f = NODES[c.from], t = NODES[c.to];
-    const lineAlpha = Math.min(opacity[c.from], opacity[c.to]);
-    if (lineAlpha < 0.04) return;
-
-    ctx.save();
-    ctx.globalAlpha = lineAlpha * 0.22;
-    ctx.strokeStyle = 'rgba(80, 140, 210, 0.5)';
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 10]);
-    ctx.lineDashOffset = -(t * 0.3);
-    ctx.beginPath();
-    ctx.moveTo(f.rx*W, f.ry*H);
-    ctx.lineTo(t.rx*W, t.ry*H);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.restore();
+  ctx.fillStyle = '#080B12'; ctx.fillRect(0, 0, W, H);
+  // star field
+  STARS.forEach(s => {
+    s.x += s.vx; s.y += s.vy;
+    if (s.x < 0) s.x = 1; if (s.x > 1) s.x = 0;
+    if (s.y < 0) s.y = 1; if (s.y > 1) s.y = 0;
+    ctx.save(); ctx.globalAlpha = s.op; ctx.fillStyle = s.col;
+    ctx.beginPath(); ctx.arc(s.x * W, s.y * H, s.r, 0, Math.PI * 2);
+    ctx.fill(); ctx.restore();
   });
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Draw nodes
-// ─────────────────────────────────────────────────────────────────────────────
-function nodeSize(type) {
-  if (type === 'argocd')  return [148, 60];
-  if (type === 'cluster') return [120, 48];
-  return [96, 36];
-}
+function drawScene() {
+  const cx = W / 2;
+  const iconCY = H * 0.40;
+  const iconOp = A.icon;
 
-function drawArgoCD(x, y, op) {
-  const [w, h] = nodeSize('argocd');
-  const px = x - w/2, py = y - h/2;
+  if (iconOp > 0.01) {
+    // Radial glow halo
+    const grad = ctx.createRadialGradient(cx, iconCY, 0, cx, iconCY, 140);
+    grad.addColorStop(0, `rgba(59,130,246,${iconOp * 0.14})`);
+    grad.addColorStop(0.5, `rgba(59,130,246,${iconOp * 0.04})`);
+    grad.addColorStop(1, 'transparent');
+    ctx.save(); ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(cx, iconCY, 140, 0, Math.PI * 2);
+    ctx.fill(); ctx.restore();
 
-  // Pressure-sensitive glow color
-  const gcol = pressure > 0.5 ? '#FB923C' : '#EF4444';
-  const glowR = 28 + pressure * 22 + Math.sin(pulsePhase) * (4 + pressure * 8);
+    // Expanding rings
+    drawRings(cx, iconCY, iconOp);
 
-  ctx.save();
-  ctx.globalAlpha = op;
-
-  // Outer glow
-  ctx.shadowColor = gcol;
-  ctx.shadowBlur  = glowR;
-  ctx.fillStyle   = 'rgba(28, 8, 8, 0.95)';
-  rr(ctx, px, py, w, h, 12);
-  ctx.fill();
-
-  // Double glow at high pressure
-  if (pressure > 0.5) {
-    ctx.shadowBlur = glowR * 1.6;
-    rr(ctx, px, py, w, h, 12);
-    ctx.fill();
-  }
-
-  ctx.shadowBlur = 0;
-
-  // Border
-  const borderAlpha = 0.7 + pressure * 0.3;
-  ctx.strokeStyle = pressure > 0.5
-    ? `rgba(251, 146, 60, ${borderAlpha})`
-    : `rgba(239, 68, 68, ${borderAlpha})`;
-  ctx.lineWidth = 1.5;
-  rr(ctx, px, py, w, h, 12);
-  ctx.stroke();
-
-  ctx.restore();
-  // Label — ArgoCD icon + text centred, drawn after restore so glow doesn't bleed
-  drawArgoLabel(x, y, 'ArgoCD', '600 15px Inter,-apple-system,sans-serif', '#FFFFFF', op, 15);
-}
-
-function drawCluster(x, y, op) {
-  const [w, h] = nodeSize('cluster');
-  const px = x - w/2, py = y - h/2;
-
-  ctx.save();
-  ctx.globalAlpha = op;
-
-  // Glow
-  ctx.shadowColor = 'rgba(59,130,246,0.45)';
-  ctx.shadowBlur  = 14;
-  ctx.fillStyle   = 'rgba(8, 18, 42, 0.95)';
-  rr(ctx, px, py, w, h, 9);
-  ctx.fill();
-  ctx.shadowBlur  = 0;
-
-  // Border
-  ctx.strokeStyle = 'rgba(59,130,246,0.65)';
-  ctx.lineWidth   = 1;
-  rr(ctx, px, py, w, h, 9);
-  ctx.stroke();
-
-  // Label
-  ctx.fillStyle   = 'rgba(147,197,253,0.85)';
-  ctx.font        = '500 11px Inter, -apple-system, sans-serif';
-  ctx.textAlign   = 'center';
-  ctx.textBaseline= 'middle';
-  ctx.fillText('K8s Cluster', x, py + 14);
-
-  // Workload dots
-  const nd = step >= 3 ? 4 : 3;
-  const sp = 11;
-  const sx = x - ((nd - 1) * sp) / 2;
-  const dy = py + h - 14;
-  for (let i = 0; i < nd; i++) {
-    ctx.fillStyle   = 'rgba(96,165,250,0.7)';
-    ctx.shadowColor = 'rgba(96,165,250,0.4)';
-    ctx.shadowBlur  = 4;
-    ctx.beginPath();
-    ctx.arc(sx + i*sp, dy, 3, 0, Math.PI*2);
-    ctx.fill();
-  }
-
-  ctx.restore();
-}
-
-function drawApp(x, y, op) {
-  const [w, h] = nodeSize('app');
-  const px = x - w/2, py = y - h/2;
-
-  ctx.save();
-  ctx.globalAlpha = op;
-
-  ctx.shadowColor = 'rgba(6,182,212,0.3)';
-  ctx.shadowBlur  = 12;
-  ctx.fillStyle   = 'rgba(0,18,26,0.92)';
-  rr(ctx, px, py, w, h, 7);
-  ctx.fill();
-  ctx.shadowBlur  = 0;
-
-  ctx.strokeStyle = 'rgba(6,182,212,0.55)';
-  ctx.lineWidth   = 1;
-  rr(ctx, px, py, w, h, 7);
-  ctx.stroke();
-
-  ctx.fillStyle   = 'rgba(103,232,249,0.88)';
-  ctx.font        = '500 11px Inter, -apple-system, sans-serif';
-  ctx.textAlign   = 'center';
-  ctx.textBaseline= 'middle';
-  ctx.fillText('Application', x, y);
-
-  ctx.restore();
-}
-
-function drawNodes() {
-  Object.entries(NODES).forEach(([k, n]) => {
-    const op = opacity[k];
-    if (op < 0.01) return;
-    const x = n.rx * W, y = n.ry * H;
-    if (n.type === 'argocd')  drawArgoCD(x, y, op);
-    else if (n.type === 'cluster') drawCluster(x, y, op);
-    else drawApp(x, y, op);
-  });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Update
-// ─────────────────────────────────────────────────────────────────────────────
-function updateOpacities() {
-  Object.keys(NODES).forEach(k => {
-    const n = NODES[k];
-    const target = (n.step <= step && step < 5) ? 1 : (step >= 5 && step <= 6 ? (n.step <= step ? 0.25 : 0) : 0);
-    opacity[k] = lerp(opacity[k], target, 0.025);
-  });
-}
-
-function updatePressure() {
-  const targets = [0, 0.08, 0.22, 0.50, 1.0, 1.0, 1.0];
-  const target  = targets[clamp(step, 0, 6)];
-  pressure = lerp(pressure, target, 0.018);
-}
-
-function maybeSpawnParticles() {
-  if (frozen) return;
-  const prob = spawnProb();
-  if (prob === 0) return;
-
-  CONNS.forEach(c => {
-    if (c.step > step) return;
-    const fop = opacity[c.from], top = opacity[c.to];
-    if (fop < 0.35 || top < 0.35) return;
-    if (Math.random() < prob) {
-      particles.push(new Particle(c.from, c.to, particleColor(c.from, c.to)));
+    // Icon
+    if (_argoOC) {
+      const sz = Math.min(96, H * 0.10);
+      ctx.save();
+      ctx.globalAlpha = iconOp;
+      ctx.shadowColor = 'rgba(59,130,246,0.65)';
+      ctx.shadowBlur  = 22 + Math.sin(pulse * 0.7) * 8;
+      ctx.drawImage(_argoOC, cx - sz / 2, iconCY - sz / 2, sz, sz);
+      ctx.restore();
     }
-  });
-}
+  }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Narrative
-// ─────────────────────────────────────────────────────────────────────────────
-const narrativeEl = document.getElementById('narrative');
-const narTitle    = document.getElementById('nar-title');
-const narSub      = document.getElementById('nar-sub');
+  // Title
+  if (A.title > 0.01) {
+    const fs = Math.min(54, Math.max(28, W * 0.034));
+    ctx.save();
+    ctx.globalAlpha = A.title;
+    ctx.font = `700 ${fs}px Inter,sans-serif`;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(255,255,255,0.10)'; ctx.shadowBlur = 18;
+    ctx.fillText('Scalable Managed ArgoCD', cx, H * 0.57);
+    ctx.restore();
+  }
 
-const legendEl = document.getElementById('legend');
-function updateLegend() {
-  legendEl.style.opacity = (step >= 1 && step <= 4) ? '1' : '0';
-}
-
-function updateNarrative() {
-  if (step === 5) {
-    narTitle.textContent = 'One ArgoCD. Everything depends on it.';
-    narSub.textContent   = '';
-    narrativeEl.classList.add('visible');
-  } else if (step === 6) {
-    narTitle.textContent = 'What happens when everything keeps growing?';
-    narSub.textContent   = '';
-    narrativeEl.classList.add('visible');
-  } else {
-    narrativeEl.classList.remove('visible');
+  // Tagline
+  if (A.tagline > 0.01) {
+    const ts = Math.min(21, Math.max(13, W * 0.013));
+    ctx.save();
+    ctx.globalAlpha = A.tagline * 0.58;
+    ctx.font = `500 ${ts}px Inter,sans-serif`;
+    ctx.fillStyle = '#93C5FD';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('GitOps built for scale', cx, H * 0.64);
+    ctx.restore();
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Progress dots
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Progress dots ─────────────────────────────────────────────────────────────
 const progressEl = document.getElementById('progress');
+const hintEl     = document.getElementById('hint');
 for (let i = 0; i < MAX_STEPS; i++) {
-  const d = document.createElement('div');
-  d.className = 'dot';
-  d.id = 'dot' + i;
+  const d = document.createElement('div'); d.className = 'dot'; d.id = 'dot' + i;
   progressEl.appendChild(d);
 }
-function updateDots() {
-  for (let i = 0; i < MAX_STEPS; i++) {
+function updateUI() {
+  for (let i = 0; i < MAX_STEPS; i++)
     document.getElementById('dot' + i).className = 'dot' + (i === step ? ' active' : '');
-  }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Step advance
-// ─────────────────────────────────────────────────────────────────────────────
-const hintEl = document.getElementById('hint');
 let hintTimer;
-
 function advance() {
-  if (step >= MAX_STEPS - 1) return;
+  if (step >= MAX_STEPS - 1) { window.parent.postMessage({ type: 'scene-complete' }, '*'); return; }
   step++;
-
-  if (step === 5) {
-    frozen = true;
-    // Let existing particles finish, but don't spawn new ones
-    setTimeout(() => { particles = []; }, 400);
-  }
-  if (step === 6) {
-    frozen = true;
-    particles = [];
-  }
-
-  updateDots();
-  updateNarrative();
-  updateLegend();
-
-  // Flash hint
+  updateUI();
   hintEl.classList.remove('hidden');
   clearTimeout(hintTimer);
-  hintTimer = setTimeout(() => { hintEl.classList.add('hidden'); }, 3000);
+  hintTimer = setTimeout(() => hintEl.classList.add('hidden'), 3000);
 }
 
 document.addEventListener('click', advance);
 document.addEventListener('keydown', e => {
-  if (e.code === 'Space' || e.code === 'ArrowRight') { e.preventDefault(); advance(); }
-  if (e.code === 'ArrowLeft') {
-    if (step > 0) {
-      step--;
-      frozen = (step >= 5);
-      if (!frozen) particles = [];
-      updateDots(); updateNarrative();
-    }
-  }
+  if (e.code === 'Space' || e.code === 'ArrowRight') { e.preventDefault(); advance(); return; }
+  if (e.code === 'ArrowLeft' && step === 0) { window.parent.postMessage({ type: 'scene-back' }, '*'); return; }
+  if (e.code === 'ArrowLeft' && step > 0) { step--; updateUI(); }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Main loop
-// ─────────────────────────────────────────────────────────────────────────────
 function loop() {
   requestAnimationFrame(loop);
-  t++;
-  pulsePhase += 0.038 + pressure * 0.04;
-
-  updateOpacities();
-  updatePressure();
-  maybeSpawnParticles();
-
-  particles = particles.filter(p => { p.update(); return p.alive; });
-
+  pulse += 0.022;
+  tickAnim();
   drawBg();
-  drawLines();
-
-  // Particles behind nodes
-  particles.forEach(p => p.draw());
-
-  drawNodes();
+  drawScene();
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Init
-// ─────────────────────────────────────────────────────────────────────────────
-updateDots();
-updateNarrative();
-setTimeout(() => { hintEl.classList.add('hidden'); }, 4000);
+updateUI();
+setTimeout(() => hintEl.classList.add('hidden'), 4500);
 loop();
+
+// ── ArrowUp = prev scene, ArrowDown = next scene ─────────────────────────────
+document.addEventListener('keydown', function(e) {
+  if (e.code === 'ArrowUp')   { e.preventDefault(); window.parent.postMessage({type:'scene-back'},'*'); }
+  if (e.code === 'ArrowDown') { e.preventDefault(); window.parent.postMessage({type:'scene-complete'},'*'); }
+}, true);
 </script>
 </body>
 </html>

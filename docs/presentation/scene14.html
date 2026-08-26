@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scene 9 — Failover</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      background:#080B12; overflow:hidden;
+      width:100vw; height:100vh;
+      font-family:'Inter',-apple-system,sans-serif;
+      cursor:pointer; user-select:none;
+    }
+    canvas { display:block; position:absolute; top:0; left:0; pointer-events:none; }
+    #narrative {
+      position:absolute; inset:0; display:flex; flex-direction:column;
+      align-items:center; justify-content:center;
+      pointer-events:none; opacity:0; transition:opacity 1.2s ease;
+    }
+    #narrative.visible { opacity:1; }
+    #nar-title {
+      color:#fff; font-size:clamp(20px,2.8vw,46px); font-weight:700;
+      letter-spacing:-0.025em; text-align:center; line-height:1.2;
+      max-width:820px; padding:0 40px;
+    }
+    #nar-sub {
+      margin-top:14px; color:rgba(255,255,255,0.42);
+      font-size:clamp(13px,1.5vw,20px); text-align:center; padding:0 40px;
+    }
+    #scene-label {
+      position:absolute; top:28px; left:36px;
+      color:rgba(255,255,255,0.18); font-size:11px;
+      letter-spacing:0.12em; text-transform:uppercase; font-weight:500; pointer-events:none;
+    }
+    #step-label {
+      position:absolute; top:28px; right:36px;
+      color:rgba(255,255,255,0.30); font-size:11.5px; letter-spacing:0.03em;
+      font-weight:500; pointer-events:none; text-align:right; max-width:580px;
+    }
+    #progress {
+      position:absolute; bottom:30px; left:50%; transform:translateX(-50%);
+      display:flex; gap:7px; align-items:center; pointer-events:none;
+    }
+    .dot { width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,0.15); transition:all 0.4s ease; }
+    .dot.active { background:rgba(255,255,255,0.75); width:18px; border-radius:3px; }
+    #hint {
+      position:absolute; bottom:52px; left:50%; transform:translateX(-50%);
+      color:rgba(255,255,255,0.18); font-size:11px; letter-spacing:0.10em;
+      text-transform:uppercase; pointer-events:none; white-space:nowrap; transition:opacity 0.5s;
+    }
+    #hint.hidden { opacity:0; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="narrative"><h1 id="nar-title"></h1><p id="nar-sub"></p></div>
+<div id="scene-label">Scene 14 &nbsp;/&nbsp; Failover</div>
+<div id="step-label"></div>
+<div id="hint">Click or press Space to continue</div>
+<div id="progress"></div>
+
+<script>
+'use strict';
+
+// ─── Canvas ──────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+let W = 0, H = 0;
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width  = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  ctx.scale(dpr, dpr);
+}
+resize(); window.addEventListener('resize', resize);
+
+// ─── ArgoCD icon ─────────────────────────────────────────────────────────────
+const _argoImg = new Image();
+let _argoOC = null;
+_argoImg.onload = () => {
+  const oc = document.createElement('canvas');
+  oc.width = 64; oc.height = 64;
+  oc.getContext('2d').drawImage(_argoImg, 0, 0, 64, 64);
+  _argoOC = oc;
+};
+_argoImg.src = 'argocd-icon.svg';
+
+function drawArgoLabel(cx, cy, text, font, color, op, iconSz) {
+  if (!iconSz) iconSz = 14;
+  ctx.save();
+  ctx.font = font;
+  const tw = ctx.measureText(text).width;
+  const gap = 5, totalW = iconSz + gap + tw;
+  const ix = cx - totalW / 2;
+  ctx.globalAlpha = op; ctx.shadowBlur = 0;
+  if (_argoOC) ctx.drawImage(_argoOC, ix, cy - iconSz / 2, iconSz, iconSz);
+  ctx.fillStyle = color; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, ix + iconSz + gap, cy);
+  ctx.restore();
+}
+
+// ─── Layout ──────────────────────────────────────────────────────────────────
+const BOX = { x1:0.07, y1:0.13, x2:0.93, y2:0.52 };
+
+// CP container geometry
+const CP_W        = 218;   // container width (px)
+const APP_W       = 46;    // app box width (px)
+const APP_H       = 18;    // app box height (px)
+const APP_DX      = [-38, +38];        // left/right app-center x-offset from CP center
+const ROW_N       = [-16, +16];        // 2-row layout (normal state)
+const ROW_E       = [-48, -16, +16, +48]; // 4-row layout (expanded, post-migration)
+const H_HALF_BASE = 52;   // CP container half-height, normal  (h = 104)
+const H_HALF_EXP  = 87;   // CP container half-height, expanded (h = 174)
+
+// Cluster definitions: 0=UCL-A, 1=UCL-B (live in CP-1), 2=UCL-C, 3=UCL-D (CP-2)
+const CL = [
+  { name:'UCL-A', col:'#60A5FA' },
+  { name:'UCL-B', col:'#A78BFA' },
+  { name:'UCL-C', col:'#34D399' },
+  { name:'UCL-D', col:'#C084FC' },
+];
+
+// ─── Nodes ────────────────────────────────────────────────────────────────────
+// cp1/cp2: CP container centers (also particle routing endpoints)
+// ucl_*: cluster node centers (below CPs)
+const NODES = {
+  platform:  { rx:0.50, ry:0.075 },
+  l1_appset: { rx:0.50, ry:0.295 },
+  cp1:       { rx:0.26, ry:0.660 },
+  cp2:       { rx:0.74, ry:0.660 },
+  ucl_a:     { rx:0.155, ry:0.862 },
+  ucl_b:     { rx:0.365, ry:0.862 },
+  ucl_c:     { rx:0.635, ry:0.862 },
+  ucl_d:     { rx:0.845, ry:0.862 },
+};
+
+const nop = {};
+Object.keys(NODES).forEach(k => nop[k] = 0);
+function updateNop() {
+  const tgt = step >= 6 ? 0.12 : 1;
+  Object.keys(nop).forEach(k => { nop[k] += (tgt - nop[k]) * 0.032; });
+}
+
+// ─── Animated state — pure lerp targets derived from step ────────────────────
+const A = {
+  cp1Error: 0,   // 0=healthy, 1=offline
+  atCP2_A:  0,   // UCL-A apps: 0=in CP-1, 1=in CP-2
+  atCP2_B:  0,   // UCL-B apps: staggered behind atCP2_A
+  dbCard:   0,   // DB update card opacity
+};
+
+function tickAnim() {
+  const s  = step;
+  const sp = 0.038;
+
+  // CP-1 error level (stays at 1 from step 2 onward — no recovery)
+  const errTgt = s === 0 ? 0 : s === 1 ? 0.55 : 1;
+  A.cp1Error += (errTgt - A.cp1Error) * sp;
+
+  // UCL-A migration: step 4+ → CP-2
+  const aTgt = s >= 4 ? 1 : 0;
+  A.atCP2_A += (aTgt - A.atCP2_A) * sp;
+
+  // UCL-B: same but gated on A being 45% done (visible stagger)
+  const bTgt = (s >= 4 && A.atCP2_A > 0.45) ? 1 : 0;
+  A.atCP2_B += (bTgt - A.atCP2_B) * sp;
+
+  // DB card: step 3 only
+  const dbTgt = s === 3 ? 1 : 0;
+  A.dbCard += (dbTgt - A.dbCard) * (sp * 1.8);
+}
+
+// expansion: 0→1 as migration completes — drives CP-2 container height
+function expVal() { return Math.max(A.atCP2_A, A.atCP2_B); }
+
+// ─── Particles ────────────────────────────────────────────────────────────────
+const CONNS = [
+  { from:'l1_appset', to:'platform',  minS:0, maxS:99, col:'#60A5FA', rate:0.011 },
+  { from:'platform',  to:'l1_appset', minS:0, maxS:99, col:'#4ADE80', rate:0.010 },
+  { from:'l1_appset', to:'cp1',       minS:0, maxS:1,  col:'#7DD3FC', rate:0.016 },
+  { from:'l1_appset', to:'cp2',       minS:0, maxS:99, col:'#7DD3FC', rate:0.016 },
+  { from:'l1_appset', to:'cp2',       minS:4, maxS:99, col:'#2DD4BF', rate:0.020 },
+];
+
+let particles = [];
+
+class Particle {
+  constructor(c) {
+    this.from = c.from; this.to = c.to; this.col = c.col;
+    this.p   = 0;
+    this.spd = 0.007 + Math.random() * 0.005;
+    this.r   = 1.8 + Math.random() * 1.1;
+    this.bx  = (Math.random() - .5) * 0.03;
+    this.by  = (Math.random() - .5) * 0.02;
+    this.alive = true;
+  }
+  pos() {
+    const f = NODES[this.from], t = NODES[this.to];
+    const S = Math.min(W, H);
+    const fx=f.rx*W, fy=f.ry*H, tx=t.rx*W, ty=t.ry*H;
+    const cx=(fx+tx)/2+this.bx*S, cy=(fy+ty)/2+this.by*S;
+    const u = 1 - this.p;
+    return { x:u*u*fx+2*u*this.p*cx+this.p*this.p*tx,
+             y:u*u*fy+2*u*this.p*cy+this.p*this.p*ty };
+  }
+  update() { this.p += this.spd; if (this.p >= 1) this.alive = false; }
+  draw() {
+    const { x, y } = this.pos(), a = Math.sin(this.p * Math.PI);
+    ctx.save();
+    ctx.globalAlpha = a * 0.32; ctx.fillStyle = this.col;
+    ctx.shadowColor = this.col; ctx.shadowBlur = 12;
+    ctx.beginPath(); ctx.arc(x, y, this.r * 2.5, 0, Math.PI*2); ctx.fill();
+    ctx.globalAlpha = a * 0.88; ctx.shadowBlur = 4;
+    ctx.beginPath(); ctx.arc(x, y, this.r, 0, Math.PI*2); ctx.fill();
+    ctx.restore();
+  }
+}
+
+function maybeSpawn() {
+  if (step >= 6) return;
+  CONNS.forEach(c => {
+    if (step < c.minS || step > c.maxS) return;
+    if (Math.random() < c.rate) particles.push(new Particle(c));
+  });
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+  ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y); ctx.closePath();
+}
+
+function lerp(a, b, t) { return a + (b - a) * t; }
+
+function bezPos(sx, sy, ex, ey, p) {
+  if (p <= 0.001) return { x:sx, y:sy };
+  if (p >= 0.999) return { x:ex, y:ey };
+  const cx = (sx + ex) / 2;
+  const cy = Math.min(sy, ey) - 85; // arc rises above midpoint
+  return {
+    x: (1-p)*(1-p)*sx + 2*(1-p)*p*cx + p*p*ex,
+    y: (1-p)*(1-p)*sy + 2*(1-p)*p*cy + p*p*ey,
+  };
+}
+
+// CP-1 dynamic color (sky-blue → red)
+function cp1Col() {
+  const e = A.cp1Error;
+  return `rgb(${Math.round(56+(239-56)*e)},${Math.round(189+(68-189)*e)},${Math.round(248+(68-248)*e)})`;
+}
+function cp1Glow() {
+  const e = A.cp1Error;
+  return `rgba(${Math.round(56+(239-56)*e)},${Math.round(189+(68-189)*e)},${Math.round(248+(68-248)*e)},${0.34+e*0.36})`;
+}
+
+// ─── App position ─────────────────────────────────────────────────────────────
+function appPos(ci, si) {
+  const cp1x = NODES.cp1.rx * W,  cp1y = NODES.cp1.ry * H;
+  const cp2x = NODES.cp2.rx * W,  cp2y = NODES.cp2.ry * H;
+  const dx   = APP_DX[si];
+  const e    = expVal();
+
+  if (ci === 2 || ci === 3) {
+    // CP-2 native: shift rows down as expansion grows
+    const ri   = ci - 2;                       // 0 for UCL-C, 1 for UCL-D
+    const rowY = lerp(ROW_N[ri], ROW_E[ri+2], e);
+    return { x: cp2x + dx, y: cp2y + rowY };
+  }
+
+  // Migrating (UCL-A=0, UCL-B=1)
+  const p      = ci === 0 ? A.atCP2_A : A.atCP2_B;
+  const srcRow = ROW_N[ci];    // –16 for UCL-A, +16 for UCL-B in CP-1
+  const dstRow = ROW_E[ci];    // –48 for UCL-A, –16 for UCL-B in CP-2
+  return bezPos(cp1x+dx, cp1y+srcRow, cp2x+dx, cp2y+dstRow, p);
+}
+
+// ─── Draw: background ─────────────────────────────────────────────────────────
+function drawBg() {
+  ctx.fillStyle = '#080B12'; ctx.fillRect(0, 0, W, H);
+  const g = ctx.createRadialGradient(W*.5,H*.5,0,W*.5,H*.5,Math.min(W,H)*.55);
+  g.addColorStop(0,'rgba(5,15,40,0.10)'); g.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
+
+// ─── Draw: Managed ArgoCD box ─────────────────────────────────────────────────
+function drawManagedArgoBox() {
+  const op = nop.l1_appset; if (op < 0.01) return;
+  const bx=BOX.x1*W, by=BOX.y1*H, bw=(BOX.x2-BOX.x1)*W, bh=(BOX.y2-BOX.y1)*H;
+  const hdr = 34;
+  ctx.save();
+  ctx.globalAlpha = op * 0.028; ctx.fillStyle = '#3B82F6'; rr(bx,by,bw,bh,18); ctx.fill();
+  ctx.globalAlpha = op * 0.10;  ctx.fillStyle = '#1D4ED8';
+  ctx.beginPath();
+  ctx.moveTo(bx+18,by); ctx.lineTo(bx+bw-18,by); ctx.quadraticCurveTo(bx+bw,by,bx+bw,by+18);
+  ctx.lineTo(bx+bw,by+hdr); ctx.lineTo(bx,by+hdr); ctx.lineTo(bx,by+18);
+  ctx.quadraticCurveTo(bx,by,bx+18,by); ctx.closePath(); ctx.fill();
+  ctx.globalAlpha = op * 0.28; ctx.strokeStyle = 'rgba(96,165,250,0.55)'; ctx.lineWidth = 1.5;
+  ctx.setLineDash([8,14]); rr(bx,by,bw,bh,18); ctx.stroke(); ctx.setLineDash([]);
+  ctx.restore();
+  drawArgoLabel(bx+bw/2, by+hdr/2, 'Managed ArgoCD', '700 14px Inter,sans-serif', '#93C5FD', op*0.80, 15);
+}
+
+// ─── Draw: Platform Service ───────────────────────────────────────────────────
+function drawPlatform(x, y, op) {
+  const [w,h]=[172,58], px=x-w/2, py=y-h/2;
+  ctx.save(); ctx.globalAlpha = op;
+  ctx.shadowColor = 'rgba(74,222,128,0.42)'; ctx.shadowBlur = 8+Math.sin(pulse*.7)*4;
+  ctx.fillStyle = 'rgba(4,18,12,0.97)'; rr(px,py,w,h,10); ctx.fill();
+  ctx.shadowBlur = 0; ctx.strokeStyle = 'rgba(74,222,128,0.68)'; ctx.lineWidth = 1.5;
+  rr(px,py,w,h,10); ctx.stroke();
+  ctx.fillStyle = 'rgba(74,222,128,0.48)'; ctx.font = '500 10px Inter,sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('PostgreSQL · source of truth', x, y+8);
+  ctx.restore();
+  drawArgoLabel(x, y-7, 'Platform Service', '600 13px Inter,sans-serif', '#4ADE80', op, 13);
+}
+
+// ─── Draw: L1 ApplicationSet ─────────────────────────────────────────────────
+function drawL1AppSet(x, y, op) {
+  const [w,h]=[178,56], px=x-w/2, py=y-h/2;
+  ctx.save(); ctx.globalAlpha = op;
+  ctx.shadowColor = 'rgba(74,222,128,0.44)'; ctx.shadowBlur = 14+Math.sin(pulse*.6)*5;
+  ctx.fillStyle = 'rgba(4,14,8,0.97)'; rr(px,py,w,h,12); ctx.fill();
+  ctx.shadowBlur = 0; ctx.strokeStyle = 'rgba(74,222,128,0.68)'; ctx.lineWidth = 1.5;
+  rr(px,py,w,h,12); ctx.stroke();
+  ctx.fillStyle = 'rgba(74,222,128,0.50)'; ctx.font = '500 10px Inter,sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('ApplicationSet hierarchy', x, y+9);
+  ctx.restore();
+  drawArgoLabel(x, y-8, 'L1 ApplicationSet', '700 13px Inter,sans-serif', '#4ADE80', op, 13);
+}
+
+// ─── Draw: CP container box ───────────────────────────────────────────────────
+function drawCPContainer(isCP1, op) {
+  if (op < 0.01) return;
+  const n  = isCP1 ? NODES.cp1 : NODES.cp2;
+  const cx = n.rx * W, cy = n.ry * H;
+  const e  = isCP1 ? 0 : expVal();
+  const halfH = lerp(H_HALF_BASE, H_HALF_EXP, e);
+  const h  = halfH * 2;
+  const px = cx - CP_W/2, py = cy - halfH;
+
+  const col  = isCP1 ? cp1Col() : '#7DD3FC';
+  const glow = isCP1 ? cp1Glow() : `rgba(56,189,248,${0.28+e*0.18})`;
+
+  ctx.save();
+  ctx.globalAlpha = op;
+  ctx.shadowColor = glow; ctx.shadowBlur = 16+Math.sin(pulse*.65)*4;
+  ctx.fillStyle   = isCP1 ? `rgba(${4+Math.round(18*A.cp1Error)},12,28,0.97)` : 'rgba(4,12,28,0.97)';
+  rr(px,py,CP_W,h,12); ctx.fill();
+
+  ctx.shadowBlur  = 0;
+  ctx.strokeStyle = col;
+  ctx.globalAlpha = op * (isCP1 ? 0.60+A.cp1Error*0.30 : 0.65);
+  ctx.lineWidth   = 1.5;
+  rr(px,py,CP_W,h,12); ctx.stroke();
+
+  // Header tint
+  ctx.globalAlpha = op * 0.11; ctx.fillStyle = isCP1 ? col : '#38BDF8';
+  ctx.beginPath();
+  ctx.moveTo(px+12,py); ctx.lineTo(px+CP_W-12,py); ctx.quadraticCurveTo(px+CP_W,py,px+CP_W,py+12);
+  ctx.lineTo(px+CP_W,py+28); ctx.lineTo(px,py+28); ctx.lineTo(px,py+12);
+  ctx.quadraticCurveTo(px,py,px+12,py); ctx.closePath(); ctx.fill();
+
+  // OFFLINE / DEGRADED badge (CP-1 only)
+  if (isCP1 && A.cp1Error > 0.08) {
+    const bOp  = Math.min(1, (A.cp1Error-0.08)/0.40);
+    const isOff = A.cp1Error > 0.65;
+    ctx.globalAlpha = op * bOp;
+    const bCol = isOff ? '#EF4444' : '#F59E0B';
+    ctx.fillStyle = `${bCol}22`; rr(px+CP_W-74,py+6,68,16,4); ctx.fill();
+    ctx.fillStyle = bCol; ctx.font = '700 8px Inter,sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(isOff ? 'OFFLINE' : 'DEGRADED', px+CP_W-40, py+14);
+  }
+
+  // Row separator in CP-2 (migrated / native divider)
+  if (!isCP1 && e > 0.10) {
+    ctx.globalAlpha = op * e * 0.18;
+    ctx.strokeStyle = 'rgba(125,211,252,0.40)'; ctx.lineWidth = 1; ctx.setLineDash([3,6]);
+    ctx.beginPath(); ctx.moveTo(px+14,cy); ctx.lineTo(px+CP_W-14,cy); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
+
+  drawArgoLabel(cx, py+14, isCP1 ? 'CP-1' : 'CP-2', '700 12px Inter,sans-serif', col, op, 12);
+}
+
+// ─── Draw: single app box ─────────────────────────────────────────────────────
+function drawApp(x, y, ci, si, errMix, isFlying) {
+  const cl = CL[ci];
+  const appName = `APP-${ci * 2 + si + 1}`;
+  const px = x-APP_W/2, py = y-APP_H/2;
+
+  ctx.save();
+  if (isFlying) { ctx.shadowColor = cl.col; ctx.shadowBlur = 18; }
+
+  ctx.fillStyle = errMix > 0.5 ? 'rgba(239,68,68,0.08)' : `${cl.col}11`;
+  rr(px,py,APP_W,APP_H,4); ctx.fill();
+
+  ctx.shadowBlur  = 0;
+  const ba = errMix > 0.5 ? 0.55+errMix*0.35 : 0.70;
+  ctx.strokeStyle = errMix > 0.5 ? `rgba(239,68,68,${ba})` : `${cl.col}AE`;
+  ctx.lineWidth   = 1;
+  rr(px,py,APP_W,APP_H,4); ctx.stroke();
+
+  ctx.fillStyle = errMix > 0.55 ? 'rgba(239,68,68,0.88)' : `${cl.col}CC`;
+  ctx.font      = '600 8.5px Inter,sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(errMix > 0.55 ? 'Unknown' : appName, x, y);
+  ctx.restore();
+}
+
+// ─── Draw: all app boxes (2 passes: at-rest then flying) ─────────────────────
+function drawAllApps() {
+  const scOp = Math.min(nop.cp1, nop.cp2);
+  if (scOp < 0.01) return;
+
+  // Pass 1 — apps sitting inside their containers
+  for (let ci = 0; ci < 4; ci++) {
+    const p      = ci===0 ? A.atCP2_A : ci===1 ? A.atCP2_B : 1;
+    const flying = ci < 2 && p > 0.04 && p < 0.96;
+    if (flying) continue;
+    const errMix = (ci < 2 && p < 0.04 && A.cp1Error > 0.10) ? A.cp1Error : 0;
+    for (let si = 0; si < 2; si++) {
+      const { x, y } = appPos(ci, si);
+      ctx.save(); ctx.globalAlpha = scOp; drawApp(x,y,ci,si,errMix,false); ctx.restore();
+    }
+  }
+
+  // Pass 2 — flying apps (drawn on top with glow)
+  for (let ci = 0; ci < 2; ci++) {
+    const p = ci===0 ? A.atCP2_A : A.atCP2_B;
+    if (p <= 0.04 || p >= 0.96) continue;
+    for (let si = 0; si < 2; si++) {
+      const { x, y } = appPos(ci, si);
+      ctx.save(); ctx.globalAlpha = scOp; drawApp(x,y,ci,si,0,true); ctx.restore();
+    }
+  }
+}
+
+// ─── Draw: cluster node ───────────────────────────────────────────────────────
+function drawClusterNode(key, ci, op) {
+  if (op < 0.01) return;
+  const n  = NODES[key];
+  const cx = n.rx * W, cy = n.ry * H;
+  const [w,h] = [62,26], px = cx-w/2, py = cy-h/2;
+
+  // UCL-A/B color: blue → amber (offline) → teal (migrated)
+  let col;
+  if (ci < 2) {
+    const migP = ci===0 ? A.atCP2_A : A.atCP2_B;
+    const err  = A.cp1Error;
+    if (migP > 0.1) {
+      // lerp blue → teal as migration progresses
+      const r=Math.round(96+(45-96)*migP), g=Math.round(165+(212-165)*migP), b=Math.round(250+(191-250)*migP);
+      col = `rgb(${r},${g},${b})`;
+    } else if (err > 0.3) {
+      // lerp blue → amber as CP-1 errors
+      const r=Math.round(125+(245-125)*err), g=Math.round(211+(158-211)*err), b=Math.round(252+(11-252)*err);
+      col = `rgb(${r},${g},${b})`;
+    } else {
+      col = '#7DD3FC';
+    }
+  } else {
+    col = CL[ci].col;
+  }
+
+  ctx.save(); ctx.globalAlpha = op;
+  ctx.shadowColor = `${col}50`; ctx.shadowBlur = 6+Math.sin(pulse*.8)*2;
+  ctx.fillStyle   = 'rgba(4,10,22,0.97)';
+  rr(px,py,w,h,6); ctx.fill();
+  ctx.shadowBlur  = 0; ctx.strokeStyle = `${col}90`; ctx.lineWidth = 1;
+  rr(px,py,w,h,6); ctx.stroke();
+  ctx.fillStyle   = col; ctx.font = '600 9.5px Inter,sans-serif';
+  ctx.textAlign   = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(CL[ci].name, cx, cy);
+  ctx.restore();
+}
+
+// ─── Draw: cluster management lines (CP → cluster) ────────────────────────────
+function drawClusterLines() {
+  const cp1x=NODES.cp1.rx*W, cp1y=NODES.cp1.ry*H+H_HALF_BASE; // bottom of CP-1
+  const cp2x=NODES.cp2.rx*W;
+  const cp2y_base = NODES.cp2.ry*H + lerp(H_HALF_BASE, H_HALF_EXP, expVal()); // bottom of CP-2
+  const migAvg = (A.atCP2_A + A.atCP2_B) * 0.5;
+
+  // UCL-C/D node centers
+  const ucl_c = NODES.ucl_c, ucl_d = NODES.ucl_d;
+  const ucl_a = NODES.ucl_a, ucl_b = NODES.ucl_b;
+
+  // CP-2 → UCL-C/D (always, native)
+  const baseOp = nop.cp2 * 0.70;
+  drawMgmtLine(cp2x, cp2y_base, ucl_c.rx*W, ucl_c.ry*H, '#34D399', baseOp);
+  drawMgmtLine(cp2x, cp2y_base, ucl_d.rx*W, ucl_d.ry*H, '#C084FC', baseOp);
+
+  // CP-1 → UCL-A/B (fades as migration takes over)
+  const cp1Own = (1 - migAvg) * nop.cp1 * 0.70;
+  if (cp1Own > 0.01) {
+    const lCol = A.cp1Error > 0.60 ? '#EF4444' : A.cp1Error > 0.20 ? '#F59E0B' : '#7DD3FC';
+    drawMgmtLine(cp1x, cp1y, ucl_a.rx*W, ucl_a.ry*H, lCol, cp1Own);
+    drawMgmtLine(cp1x, cp1y, ucl_b.rx*W, ucl_b.ry*H, lCol, cp1Own);
+  }
+
+  // CP-2 → UCL-A/B (appears as migration progresses — long diagonal lines)
+  const cp2MigOp = migAvg * nop.cp2 * 0.70;
+  if (cp2MigOp > 0.01) {
+    drawMgmtLine(cp2x, cp2y_base, ucl_a.rx*W, ucl_a.ry*H, '#2DD4BF', cp2MigOp);
+    drawMgmtLine(cp2x, cp2y_base, ucl_b.rx*W, ucl_b.ry*H, '#2DD4BF', cp2MigOp);
+  }
+}
+
+function drawMgmtLine(x1, y1, x2, y2, col, op) {
+  ctx.save(); ctx.globalAlpha = op;
+  ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+  ctx.setLineDash([5,8]);
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  ctx.setLineDash([]);
+  // Small arrowhead at cluster end
+  const ang = Math.atan2(y2-y1, x2-x1);
+  ctx.globalAlpha = op * 0.70;
+  ctx.fillStyle = col;
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2-8*Math.cos(ang-0.4), y2-8*Math.sin(ang-0.4));
+  ctx.lineTo(x2-8*Math.cos(ang+0.4), y2-8*Math.sin(ang+0.4));
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+// ─── Draw: structural skeleton lines (L1 → CPs) ──────────────────────────────
+function drawStructuralLines() {
+  const l1=NODES.l1_appset, cp1=NODES.cp1, cp2=NODES.cp2, pl=NODES.platform;
+
+  // Platform ↔ L1 (animated dash)
+  const plOp = Math.min(nop.platform, nop.l1_appset);
+  ctx.save(); ctx.globalAlpha = plOp * 0.14;
+  ctx.strokeStyle = 'rgba(120,160,220,0.6)'; ctx.lineWidth = 1;
+  ctx.setLineDash([4,10]); ctx.lineDashOffset = -(t*0.22);
+  ctx.beginPath(); ctx.moveTo(pl.rx*W,pl.ry*H); ctx.lineTo(l1.rx*W,l1.ry*H); ctx.stroke();
+  ctx.setLineDash([]); ctx.restore();
+
+  const migAvg = (A.atCP2_A + A.atCP2_B) * 0.5;
+
+  // L1 → CP-1 (fades as migration completes)
+  const op1 = (1-migAvg) * Math.min(nop.l1_appset,nop.cp1) * 0.22;
+  if (op1 > 0.01) {
+    ctx.save(); ctx.globalAlpha = op1;
+    ctx.strokeStyle='rgba(125,211,252,0.55)'; ctx.lineWidth=1; ctx.setLineDash([4,10]);
+    ctx.beginPath(); ctx.moveTo(l1.rx*W,l1.ry*H); ctx.lineTo(cp1.rx*W,cp1.ry*H); ctx.stroke();
+    ctx.setLineDash([]); ctx.restore();
+  }
+
+  // L1 → CP-2 (brightens as migration completes)
+  const op2 = Math.min(nop.l1_appset,nop.cp2) * (0.22 + migAvg * 0.14);
+  if (op2 > 0.01) {
+    ctx.save(); ctx.globalAlpha = op2;
+    ctx.strokeStyle='rgba(125,211,252,0.55)'; ctx.lineWidth=1; ctx.setLineDash([4,10]);
+    ctx.beginPath(); ctx.moveTo(l1.rx*W,l1.ry*H); ctx.lineTo(cp2.rx*W,cp2.ry*H); ctx.stroke();
+    ctx.setLineDash([]); ctx.restore();
+  }
+}
+
+// ─── Draw: DB update card ─────────────────────────────────────────────────────
+function drawDbCard() {
+  const op = A.dbCard; if (op < 0.01) return;
+  const plX = NODES.platform.rx*W + 100;
+  const plY = NODES.platform.ry*H;
+  const cW=270, cH=84;
+  ctx.save(); ctx.globalAlpha = op;
+  ctx.fillStyle='rgba(8,11,18,0.97)'; ctx.strokeStyle='rgba(74,222,128,0.45)'; ctx.lineWidth=1;
+  rr(plX,plY-cH/2,cW,cH,10); ctx.fill(); ctx.stroke();
+  ctx.fillStyle='rgba(74,222,128,0.65)'; ctx.font='700 9px Inter,sans-serif';
+  ctx.textAlign='left'; ctx.textBaseline='middle';
+  ctx.fillText('FAILOVER INITIATED', plX+12, plY-cH/2+15);
+  ctx.fillStyle='rgba(148,220,255,0.88)'; ctx.font='500 10px "Courier New",monospace';
+  ctx.fillText('UPDATE clusters', plX+12, plY-4);
+  ctx.fillText('SET control_plane_id = CP-2', plX+12, plY+12);
+  ctx.fillStyle='rgba(45,212,191,0.85)'; ctx.font='500 9.5px Inter,sans-serif';
+  ctx.fillText('UCL-A, UCL-B  →  CP-2', plX+12, plY+32);
+  ctx.restore();
+}
+
+// ─── Scene state ─────────────────────────────────────────────────────────────
+let step = 0;
+const MAX_STEPS = 7;   // steps 0–6
+let t = 0, pulse = 0, frozen = false;
+
+const LABELS = [
+  'CP-1 and CP-2 each manage two clusters — applications in sync',
+  'CP-1 is degrading — applications showing sync errors',
+  'CP-1 is offline — applications enter Unknown state',
+  'Failover initiated — cluster.control_plane_id updated in the database',
+  'ApplicationSets reconcile — applications migrate, clusters reassigned to CP-2',
+  'CP-2 now manages all four clusters — zero manual intervention',
+  '',
+];
+
+const stepLabelEl = document.getElementById('step-label');
+const narrativeEl = document.getElementById('narrative');
+const narTitle    = document.getElementById('nar-title');
+const narSub      = document.getElementById('nar-sub');
+const progressEl  = document.getElementById('progress');
+const hintEl      = document.getElementById('hint');
+
+for (let i = 0; i < MAX_STEPS; i++) {
+  const d = document.createElement('div'); d.className='dot'; d.id='dot'+i;
+  progressEl.appendChild(d);
+}
+
+function updateUI() {
+  stepLabelEl.textContent = step < 6 ? LABELS[step] : '';
+  if (step === 6) {
+    narTitle.textContent = 'One database update. Full failover.';
+    narSub.textContent   = 'No ArgoCD YAML. No manual sync. Just data.';
+    narrativeEl.classList.add('visible');
+  } else {
+    narrativeEl.classList.remove('visible');
+  }
+  for (let i=0;i<MAX_STEPS;i++)
+    document.getElementById('dot'+i).className='dot'+(i===step?' active':'');
+}
+
+let hintTimer;
+function advance() {
+  if (step >= MAX_STEPS-1) { window.parent.postMessage({type:'scene-complete'},'*'); return; }
+  step++;
+  if (step===6) { frozen=true; particles=[]; }
+  updateUI();
+  hintEl.classList.remove('hidden');
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(() => hintEl.classList.add('hidden'), 3000);
+}
+
+document.addEventListener('click', advance);
+document.addEventListener('keydown', e => {
+  if (e.code==='Space'||e.code==='ArrowRight') { e.preventDefault(); advance(); return; }
+  if (e.code==='ArrowLeft'&&step===0) { window.parent.postMessage({type:'scene-back'},'*'); return; }
+  if (e.code==='ArrowLeft'&&step>0) { step--; frozen=false; particles=[]; updateUI(); }
+});
+
+// ─── Main loop ────────────────────────────────────────────────────────────────
+function loop() {
+  requestAnimationFrame(loop);
+  t++; pulse += 0.038;
+  tickAnim(); updateNop();
+  if (!frozen) maybeSpawn();
+  particles = particles.filter(p => { p.update(); return p.alive; });
+
+  drawBg();
+  drawManagedArgoBox();
+  drawStructuralLines();
+  drawClusterLines();       // CP→cluster management lines (behind everything)
+  particles.forEach(p => p.draw());
+
+  if (nop.platform  > 0.005) drawPlatform (NODES.platform.rx*W,  NODES.platform.ry*H,  nop.platform);
+  if (nop.l1_appset > 0.005) drawL1AppSet (NODES.l1_appset.rx*W, NODES.l1_appset.ry*H, nop.l1_appset);
+
+  drawCPContainer(true,  nop.cp1);   // CP containers (behind apps)
+  drawCPContainer(false, nop.cp2);
+
+  drawAllApps();                     // apps: at-rest first, flying on top
+
+  // Cluster nodes (below CPs)
+  if (nop.ucl_a > 0.005) drawClusterNode('ucl_a', 0, nop.ucl_a);
+  if (nop.ucl_b > 0.005) drawClusterNode('ucl_b', 1, nop.ucl_b);
+  if (nop.ucl_c > 0.005) drawClusterNode('ucl_c', 2, nop.ucl_c);
+  if (nop.ucl_d > 0.005) drawClusterNode('ucl_d', 3, nop.ucl_d);
+
+  drawDbCard();
+}
+
+updateUI();
+setTimeout(() => hintEl.classList.add('hidden'), 4000);
+loop();
+
+// ── ArrowUp = prev scene, ArrowDown = next scene ─────────────────────────────
+document.addEventListener('keydown', function(e) {
+  if (e.code === 'ArrowUp')   { e.preventDefault(); window.parent.postMessage({type:'scene-back'},'*'); }
+  if (e.code === 'ArrowDown') { e.preventDefault(); window.parent.postMessage({type:'scene-complete'},'*'); }
+}, true);
+</script>
+</body>
+</html>
