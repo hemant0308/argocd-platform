@@ -15,7 +15,7 @@ spring:
   # Override via environment variables in non-local environments.
   # ----------------------------------------------------------------
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:argocd_platform}
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5433}/${DB_NAME:argocd_platform}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:q1}
     driver-class-name: org.postgresql.Driver
@@ -116,7 +116,7 @@ argocd:
   partition:
     project-target-size: ${PARTITION_PROJECT_SIZE:100}
     cluster-target-size: ${PARTITION_CLUSTER_SIZE:100}
-    application-target-size: ${PARTITION_APPLICATION_SIZE:100}
+    application-target-size: ${PARTITION_APPLICATION_SIZE:10}
   platform:
     cache:
       # Set CACHE_ENABLED=true to activate Redis-backed plugin generator caching.

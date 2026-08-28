@@ -6,6 +6,13 @@ configs:
   params:
     server.insecure: true
 
+# The healthz?full=true liveness probe runs an internal gRPC health check that
+# can take 5-10 seconds. The default timeoutSeconds=1 causes the probe to fail
+# every time, putting the repo-server into CrashLoopBackOff.
+repoServer:
+  livenessProbe:
+    timeoutSeconds: 30
+
 # ─────────────────────────────────────────────────────────────────────────────
 # ArgoCD Notifications — cluster/project partition status callbacks
 #
